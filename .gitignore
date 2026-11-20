@@ -1,0 +1,31 @@
+# Local conversations, credentials, request records and attachments
+Data/
+.data-migration-*/
+.claude/
+.codex/
+.agents/
+.aws/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+
+# Build outputs, temporary files and local backups
+artifacts/
+bin/
+obj/
+*.exe
+*.dll
+*.pdb
+*.bak
+*.log
+*.tmp
+__pycache__/
+*.pyc
+.vs/
+.vscode/
+*.user
+*.suo

@@ -1,0 +1,870 @@
+﻿<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Claude UI" Width="1280" Height="860" MinWidth="820" MinHeight="620"
+        WindowStartupLocation="CenterScreen" Background="{DynamicResource Canvas}"
+        Foreground="{DynamicResource Ink}" FontFamily="Segoe UI, Microsoft YaHei UI" FontSize="14" UseLayoutRounding="True" SnapsToDevicePixels="True">
+  <WindowChrome.WindowChrome>
+    <WindowChrome CaptionHeight="45" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0"/>
+  </WindowChrome.WindowChrome>
+  <Window.Resources>
+    <Style x:Key="SelectableMetadata" TargetType="TextBox">
+      <Setter Property="IsReadOnly" Value="True"/>
+      <Setter Property="IsReadOnlyCaretVisible" Value="True"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Foreground" Value="{DynamicResource MutedInk}"/>
+      <Setter Property="CaretBrush" Value="{DynamicResource Ink}"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Padding" Value="0"/>
+      <Setter Property="VerticalContentAlignment" Value="Center"/>
+      <Setter Property="Template">
+        <Setter.Value><ControlTemplate TargetType="TextBox"><ScrollViewer x:Name="PART_ContentHost"/></ControlTemplate></Setter.Value>
+      </Setter>
+    </Style>
+    <Style TargetType="DatePicker">
+      <Setter Property="Background" Value="{DynamicResource Panel}"/>
+      <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource Line}"/>
+    </Style>
+    <Style TargetType="DatePickerTextBox">
+      <Setter Property="Background" Value="{DynamicResource Panel}"/>
+      <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="DatePickerTextBox">
+            <Border Background="{TemplateBinding Background}" Padding="3"><ScrollViewer x:Name="PART_ContentHost"/></Border>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <!-- Shared orange sunburst mark, drawn as a vector for crisp scaling in both themes. -->
+    <DrawingImage x:Key="BrandIcon">
+      <DrawingImage.Drawing>
+        <DrawingGroup>
+          <GeometryDrawing Brush="Transparent" Geometry="M 0,0 L 36,0 36,36 0,36 Z"/>
+          <GeometryDrawing Brush="#E87550" Geometry="M 17,14 L 15,5 L 17,4 L 20,15 L 22,6 L 24,7 L 22,16 L 29,9 L 31,11 L 24,18 L 32,16 L 33,18 L 24,20 L 32,23 L 31,25 L 23,22 L 28,29 L 26,30 L 21,23 L 22,32 L 20,33 L 18,24 L 15,32 L 13,31 L 16,23 L 9,29 L 7,28 L 14,21 L 5,24 L 4,22 L 13,19 L 4,18 L 4,16 L 14,17 L 6,11 L 7,9 L 16,16 L 11,7 L 13,6 Z"/>
+        </DrawingGroup>
+      </DrawingImage.Drawing>
+    </DrawingImage>
+    <Style TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+    </Style>
+    <Style x:Key="Muted" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{DynamicResource MutedInk}"/>
+    </Style>
+    <Style TargetType="Button">
+      <Setter Property="Background" Value="{DynamicResource Panel}"/>
+      <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource Line}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Padding" Value="12,6"/>
+      <Setter Property="MinHeight" Value="32"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Surface" CornerRadius="5" Padding="{TemplateBinding Padding}"
+                    Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}">
+              <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                VerticalAlignment="Center" RecognizesAccessKey="True"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Surface" Property="Opacity" Value=".76"/></Trigger>
+              <Trigger Property="IsPressed" Value="True"><Setter TargetName="Surface" Property="Opacity" Value=".58"/></Trigger>
+              <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Surface" Property="Opacity" Value=".43"/></Trigger>
+              <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource Accent}"/></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="Ghost" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderBrush" Value="Transparent"/>
+      <Style.Triggers>
+        <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="{DynamicResource Hover}"/></Trigger>
+      </Style.Triggers>
+    </Style>
+    <Style x:Key="Primary" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+      <Setter Property="Background" Value="{DynamicResource Accent}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource Accent}"/>
+      <Setter Property="Foreground" Value="{DynamicResource AccentInk}"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+    </Style>
+    <Style x:Key="ComposerTool" TargetType="Button" BasedOn="{StaticResource Ghost}">
+      <Setter Property="Height" Value="36"/>
+      <Setter Property="MinHeight" Value="36"/>
+      <Setter Property="Padding" Value="8,0"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/>
+      <Setter Property="Foreground" Value="{DynamicResource MutedInk}"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Surface" Background="{TemplateBinding Background}" CornerRadius="18" Padding="{TemplateBinding Padding}">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Surface" Property="Background" Value="{DynamicResource ComposerHover}"/></Trigger>
+              <Trigger Property="IsPressed" Value="True"><Setter TargetName="Surface" Property="Opacity" Value=".65"/></Trigger>
+              <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource MutedInk}"/><Setter TargetName="Surface" Property="BorderThickness" Value="1"/></Trigger>
+              <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Surface" Property="Opacity" Value=".4"/></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="ComposerSend" TargetType="Button" BasedOn="{StaticResource ComposerTool}">
+      <Setter Property="Width" Value="40"/>
+      <Setter Property="Height" Value="40"/>
+      <Setter Property="Padding" Value="0"/>
+      <Setter Property="Background" Value="{DynamicResource SendAction}"/>
+      <Setter Property="Foreground" Value="White"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Surface" Background="{TemplateBinding Background}" CornerRadius="20">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Surface" Property="Opacity" Value=".85"/></Trigger>
+              <Trigger Property="IsPressed" Value="True"><Setter TargetName="Surface" Property="Opacity" Value=".65"/></Trigger>
+              <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Surface" Property="Background" Value="{DynamicResource Selected}"/><Setter Property="Foreground" Value="{DynamicResource MutedInk}"/></Trigger>
+              <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource Ink}"/><Setter TargetName="Surface" Property="BorderThickness" Value="2"/></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style TargetType="TextBox">
+      <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+      <Setter Property="Background" Value="{DynamicResource Panel}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource Line}"/>
+      <Setter Property="CaretBrush" Value="{DynamicResource Ink}"/>
+      <Setter Property="Padding" Value="8,5"/>
+    </Style>
+    <Style x:Key="NavItem" TargetType="ListBoxItem">
+      <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+      <Setter Property="Padding" Value="10,7"/>
+      <Setter Property="Margin" Value="0,1"/>
+      <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ListBoxItem">
+            <Border x:Name="Surface" CornerRadius="5" Padding="{TemplateBinding Padding}" Background="Transparent">
+              <ContentPresenter/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Surface" Property="Background" Value="{DynamicResource Hover}"/></Trigger>
+              <Trigger Property="IsSelected" Value="True"><Setter TargetName="Surface" Property="Background" Value="{DynamicResource Selected}"/></Trigger>
+              <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Surface" Property="Background" Value="{DynamicResource Hover}"/></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="ProjectGroup" TargetType="Expander">
+      <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Expander">
+            <StackPanel>
+              <ToggleButton x:Name="HeaderToggle" IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}" HorizontalContentAlignment="Stretch" Background="Transparent" BorderThickness="0" Padding="6,8" Cursor="Hand">
+                <ToggleButton.Template>
+                  <ControlTemplate TargetType="ToggleButton">
+                    <Border x:Name="Surface" Background="Transparent" CornerRadius="5" Padding="{TemplateBinding Padding}">
+                      <DockPanel>
+                        <TextBlock x:Name="Chevron" DockPanel.Dock="Left" Text="&#xE76C;" FontFamily="Segoe MDL2 Assets" FontSize="9" VerticalAlignment="Center" Margin="0,0,8,0" Foreground="{DynamicResource MutedInk}"/>
+                        <ContentPresenter/>
+                      </DockPanel>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                      <Trigger Property="IsChecked" Value="True"><Setter TargetName="Chevron" Property="Text" Value="&#xE70D;"/></Trigger>
+                      <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Surface" Property="Background" Value="{DynamicResource Hover}"/></Trigger>
+                    </ControlTemplate.Triggers>
+                  </ControlTemplate>
+                </ToggleButton.Template>
+                <ContentPresenter ContentSource="Header" Margin="0,0,50,0"/>
+              </ToggleButton>
+              <ContentPresenter x:Name="Body" ContentSource="Content" Visibility="Collapsed"/>
+            </StackPanel>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsExpanded" Value="True"><Setter TargetName="Body" Property="Visibility" Value="Visible"/></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="SessionMenu" TargetType="ContextMenu">
+      <Setter Property="Background" Value="{DynamicResource Panel}"/>
+      <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource Line}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Padding" Value="4"/>
+      <Setter Property="MinWidth" Value="188"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ContextMenu">
+            <Border CornerRadius="5" SnapsToDevicePixels="True" Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
+                    Padding="{TemplateBinding Padding}">
+              <ScrollViewer MaxHeight="320" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto" CanContentScroll="True">
+                <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Cycle" KeyboardNavigation.TabNavigation="Cycle"/>
+              </ScrollViewer>
+            </Border>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="ProjectActionMenu" TargetType="ContextMenu" BasedOn="{StaticResource SessionMenu}">
+      <Setter Property="MinWidth" Value="210"/>
+      <Setter Property="Padding" Value="6"/>
+    </Style>
+    <Style x:Key="ProjectActionItem" TargetType="MenuItem">
+      <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="MenuItem">
+            <Border x:Name="Surface" Background="Transparent" CornerRadius="5" Padding="8,6" Margin="0,1">
+              <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="26"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                <Border x:Name="IconTile" CornerRadius="5" Background="{DynamicResource Sidebar}" Width="26" Height="26">
+                  <ContentPresenter ContentSource="Icon" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+                <TextBlock Grid.Column="1" Text="{TemplateBinding Header}" Foreground="{TemplateBinding Foreground}" Margin="10,0,12,0" FontSize="13" VerticalAlignment="Center"/>
+              </Grid>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsHighlighted" Value="True"><Setter TargetName="Surface" Property="Background" Value="{DynamicResource Selected}"/></Trigger>
+              <Trigger Property="Tag" Value="RemoveProject"><Setter Property="Foreground" Value="{DynamicResource Failure}"/><Setter TargetName="IconTile" Property="Background" Value="{DynamicResource FailureSurface}"/></Trigger>
+              <MultiTrigger>
+                <MultiTrigger.Conditions><Condition Property="Tag" Value="RemoveProject"/><Condition Property="IsHighlighted" Value="True"/></MultiTrigger.Conditions>
+                <Setter TargetName="Surface" Property="Background" Value="{DynamicResource FailureSurface}"/>
+              </MultiTrigger>
+              <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Surface" Property="Opacity" Value=".45"/></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="SessionMenuSeparator" TargetType="Separator">
+      <Setter Property="Background" Value="{DynamicResource Line}"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Separator">
+            <Border Height="1" Margin="7,4" SnapsToDevicePixels="True" Background="{TemplateBinding Background}"/>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="SessionMenuItem" TargetType="MenuItem">
+      <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="MenuItem">
+            <Border x:Name="Surface" Background="Transparent" CornerRadius="5" Padding="10,7">
+              <DockPanel>
+                <TextBlock Text="{TemplateBinding Tag}" FontFamily="Segoe MDL2 Assets" Width="23" VerticalAlignment="Center"/>
+                <ContentPresenter ContentSource="Header" RecognizesAccessKey="True"/>
+              </DockPanel>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsHighlighted" Value="True"><Setter TargetName="Surface" Property="Background" Value="{DynamicResource Selected}"/></Trigger>
+              <Trigger Property="IsEnabled" Value="False"><Setter Property="Foreground" Value="{DynamicResource MutedInk}"/><Setter TargetName="Surface" Property="Opacity" Value=".65"/></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style TargetType="ComboBoxItem">
+      <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+      <Setter Property="Background" Value="{DynamicResource Panel}"/>
+      <Setter Property="Padding" Value="9,5"/>
+      <Style.Triggers>
+        <Trigger Property="IsHighlighted" Value="True"><Setter Property="Background" Value="{DynamicResource Selected}"/></Trigger>
+      </Style.Triggers>
+    </Style>
+    <Style TargetType="ComboBox">
+      <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+      <Setter Property="Background" Value="{DynamicResource Panel}"/>
+      <Setter Property="MinHeight" Value="32"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ComboBox">
+            <Grid>
+              <ToggleButton x:Name="Choice" Focusable="False" ClickMode="Press"
+                            IsChecked="{Binding IsDropDownOpen, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}">
+                <ToggleButton.Template>
+                  <ControlTemplate TargetType="ToggleButton">
+                    <Border CornerRadius="6" Background="{DynamicResource Panel}" BorderBrush="{DynamicResource Line}" BorderThickness="1"/>
+                  </ControlTemplate>
+                </ToggleButton.Template>
+              </ToggleButton>
+              <ContentPresenter x:Name="SelectionDisplay" Margin="9,0,25,0" IsHitTestVisible="False"
+                                VerticalAlignment="Center" Content="{TemplateBinding SelectionBoxItem}">
+                <ContentPresenter.Resources>
+                  <Style TargetType="TextBlock"><Setter Property="TextTrimming" Value="CharacterEllipsis"/></Style>
+                </ContentPresenter.Resources>
+              </ContentPresenter>
+              <TextBox x:Name="PART_EditableTextBox" Visibility="Collapsed" Margin="9,0,25,0" Padding="0"
+                       VerticalAlignment="Center" MinHeight="0" Background="Transparent" BorderThickness="0"
+                       Foreground="{TemplateBinding Foreground}" IsReadOnly="{TemplateBinding IsReadOnly}"/>
+              <TextBlock Text="⌄" IsHitTestVisible="False" Margin="0,0,9,0" HorizontalAlignment="Right" VerticalAlignment="Center" Style="{StaticResource Muted}"/>
+              <Popup x:Name="PART_Popup" IsOpen="{TemplateBinding IsDropDownOpen}" Placement="Bottom" AllowsTransparency="True">
+                <Border MinWidth="{Binding ActualWidth, ElementName=Choice}" CornerRadius="6" Background="{DynamicResource Panel}"
+                        Padding="3" BorderBrush="{DynamicResource Line}" BorderThickness="1">
+                  <ScrollViewer MaxHeight="260"><ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained"/></ScrollViewer>
+                </Border>
+              </Popup>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsEditable" Value="True">
+                <Setter TargetName="SelectionDisplay" Property="Visibility" Value="Collapsed"/>
+                <Setter TargetName="PART_EditableTextBox" Property="Visibility" Value="Visible"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="ComposerModel" TargetType="ComboBox">
+      <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="MinHeight" Value="36"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ComboBox">
+            <Grid>
+              <ToggleButton x:Name="Choice" Focusable="False" ClickMode="Press"
+                            IsChecked="{Binding IsDropDownOpen, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}">
+                <ToggleButton.Template>
+                  <ControlTemplate TargetType="ToggleButton">
+                    <Border x:Name="ChoiceSurface" CornerRadius="12" Background="Transparent"/>
+                    <ControlTemplate.Triggers>
+                      <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="ChoiceSurface" Property="Background" Value="{DynamicResource ComposerHover}"/></Trigger>
+                      <Trigger Property="IsChecked" Value="True"><Setter TargetName="ChoiceSurface" Property="Background" Value="{DynamicResource ComposerHover}"/></Trigger>
+                    </ControlTemplate.Triggers>
+                  </ControlTemplate>
+                </ToggleButton.Template>
+              </ToggleButton>
+              <ContentPresenter Margin="9,0,25,0" IsHitTestVisible="False"
+                                VerticalAlignment="Center" Content="{TemplateBinding SelectionBoxItem}">
+                <ContentPresenter.Resources>
+                  <Style TargetType="TextBlock"><Setter Property="TextTrimming" Value="CharacterEllipsis"/></Style>
+                </ContentPresenter.Resources>
+              </ContentPresenter>
+              <TextBlock Text="⌄" IsHitTestVisible="False" Margin="0,0,9,0" HorizontalAlignment="Right" VerticalAlignment="Center" Style="{StaticResource Muted}"/>
+              <Popup x:Name="PART_Popup" IsOpen="{TemplateBinding IsDropDownOpen}" Placement="Bottom" AllowsTransparency="True">
+                <Border MinWidth="{Binding ActualWidth, ElementName=Choice}" CornerRadius="6" Background="{DynamicResource Panel}"
+                        Padding="3" BorderBrush="{DynamicResource Line}" BorderThickness="1">
+                  <ScrollViewer MaxHeight="260"><ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained"/></ScrollViewer>
+                </Border>
+              </Popup>
+            </Grid>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+        <Style x:Key="QuietScrollBar" TargetType="ScrollBar">
+          <Setter Property="Width" Value="10"/>
+          <Setter Property="Background" Value="Transparent"/>
+          <Setter Property="Template">
+            <Setter.Value>
+              <ControlTemplate TargetType="ScrollBar">
+                <Grid Background="Transparent">
+                  <Track x:Name="PART_Track" IsDirectionReversed="True" Orientation="Vertical"
+                         Minimum="{TemplateBinding Minimum}" Maximum="{TemplateBinding Maximum}"
+                         Value="{TemplateBinding Value}" ViewportSize="{TemplateBinding ViewportSize}">
+                    <Track.DecreaseRepeatButton>
+                      <RepeatButton Command="{x:Static ScrollBar.PageUpCommand}" Focusable="False" Opacity="0">
+                        <RepeatButton.Template><ControlTemplate TargetType="RepeatButton"><Border Background="Transparent"/></ControlTemplate></RepeatButton.Template>
+                      </RepeatButton>
+                    </Track.DecreaseRepeatButton>
+                    <Track.Thumb>
+                      <Thumb MinHeight="24">
+                        <Thumb.Template>
+                          <ControlTemplate TargetType="Thumb">
+                            <Border x:Name="Handle" Background="{DynamicResource MutedInk}" CornerRadius="3" Width="6" HorizontalAlignment="Center" Margin="0,1" Opacity=".4"/>
+                            <ControlTemplate.Triggers>
+                              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Handle" Property="Opacity" Value=".7"/></Trigger>
+                              <Trigger Property="IsDragging" Value="True"><Setter TargetName="Handle" Property="Opacity" Value=".9"/></Trigger>
+                            </ControlTemplate.Triggers>
+                          </ControlTemplate>
+                        </Thumb.Template>
+                      </Thumb>
+                    </Track.Thumb>
+                    <Track.IncreaseRepeatButton>
+                      <RepeatButton Command="{x:Static ScrollBar.PageDownCommand}" Focusable="False" Opacity="0">
+                        <RepeatButton.Template><ControlTemplate TargetType="RepeatButton"><Border Background="Transparent"/></ControlTemplate></RepeatButton.Template>
+                      </RepeatButton>
+                    </Track.IncreaseRepeatButton>
+                  </Track>
+                </Grid>
+              </ControlTemplate>
+            </Setter.Value>
+          </Setter>
+        </Style>
+  </Window.Resources>
+  <Grid x:Name="RootLayout">
+    <Grid.RowDefinitions><RowDefinition Height="46"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+    <Grid.ColumnDefinitions><ColumnDefinition x:Name="SidebarColumn" Width="240" MinWidth="200" MaxWidth="420"/><ColumnDefinition Width="*" MinWidth="540"/></Grid.ColumnDefinitions>
+    <Border Background="{DynamicResource Sidebar}"/>
+    <Border Grid.Column="1" Background="{DynamicResource Canvas}"/>
+    <StackPanel Orientation="Horizontal" Margin="17,0,0,0" VerticalAlignment="Center">
+      <Image Source="{StaticResource BrandIcon}" Width="30" Height="30" Stretch="Uniform" AutomationProperties.Name="Claude 标识"/>
+      <TextBlock Text="Claude UI" Margin="10,0,0,0" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center"/>
+    </StackPanel>
+    <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,5,0"
+                VerticalAlignment="Center" WindowChrome.IsHitTestVisibleInChrome="True">
+      <Button x:Name="ThemeButton" Style="{StaticResource Ghost}" Margin="0,0,8,0" Padding="10,3" Content="深色主题"/>
+      <Button x:Name="MinButton" Style="{StaticResource Ghost}" Content="&#xE921;" FontFamily="Segoe MDL2 Assets" FontSize="10" Width="40" ToolTip="最小化" AutomationProperties.Name="最小化"/>
+      <Button x:Name="MaxButton" Style="{StaticResource Ghost}" Content="&#xE922;" FontFamily="Segoe MDL2 Assets" FontSize="10" Width="40" ToolTip="最大化或还原" AutomationProperties.Name="最大化或还原"/>
+      <Button x:Name="CloseButton" Style="{StaticResource Ghost}" Content="&#xE8BB;" FontFamily="Segoe MDL2 Assets" FontSize="10" Width="40" ToolTip="关闭" AutomationProperties.Name="关闭"/>
+    </StackPanel>
+    <Border Grid.Row="1" Background="{DynamicResource Sidebar}" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,1,0"
+            TextElement.FontFamily="Segoe UI, Microsoft YaHei UI" TextElement.FontSize="14" TextElement.FontWeight="SemiBold">
+      <Border.Resources>
+        <Style TargetType="ScrollBar" BasedOn="{StaticResource QuietScrollBar}"/>
+      </Border.Resources>
+      <Grid Margin="13,14,13,12">
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+          <RowDefinition Height="*"/><RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <Button x:Name="NewButton" Style="{StaticResource Ghost}" HorizontalContentAlignment="Left" Height="38" Margin="0,0,0,10">
+          <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" Margin="0,0,9,0" VerticalAlignment="Center"/><TextBlock Text="新建对话" FontWeight="SemiBold"/></StackPanel>
+        </Button>
+        <StackPanel Grid.Row="1" Margin="0,0,0,21">
+          <Button x:Name="ToolsButton" Style="{StaticResource Ghost}" HorizontalContentAlignment="Left">
+            <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE90F;" FontFamily="Segoe MDL2 Assets" Margin="0,0,9,0" VerticalAlignment="Center"/><TextBlock Text="CLI 工具"/></StackPanel>
+          </Button>
+          <Button x:Name="StatsButton" Style="{StaticResource Ghost}" HorizontalContentAlignment="Left">
+            <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE9D9;" FontFamily="Segoe MDL2 Assets" Margin="0,0,9,0" VerticalAlignment="Center"/><TextBlock Text="请求统计"/></StackPanel>
+          </Button>
+        </StackPanel>
+        <Grid Grid.Row="2" Grid.RowSpan="2">
+          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+          <DockPanel Margin="0,0,0,3">
+            <Button x:Name="AddProjectButton" DockPanel.Dock="Right" Style="{StaticResource Ghost}" Content="&#xE710;" FontFamily="Segoe MDL2 Assets" Width="30" Padding="0" ToolTip="添加项目文件夹" AutomationProperties.Name="添加项目文件夹"/>
+            <Button x:Name="ArchivedProjectsButton" DockPanel.Dock="Right" Style="{StaticResource Ghost}" Content="已归档" Padding="5,3" ToolTip="查看归档的项目"/>
+            <Button x:Name="ProjectsToggleButton" Style="{StaticResource Ghost}" HorizontalContentAlignment="Left" Padding="8,5" ToolTip="展开或收起项目">
+              <StackPanel Orientation="Horizontal"><TextBlock x:Name="ProjectsChevron" Text="&#xE70D;" FontFamily="Segoe MDL2 Assets" FontSize="9" VerticalAlignment="Center" Margin="0,0,8,0"/><TextBlock Text="项目" FontWeight="SemiBold"/></StackPanel>
+            </Button>
+          </DockPanel>
+          <ScrollViewer x:Name="ProjectsBody" Grid.Row="1" MaxHeight="240" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,0,0,14">
+            <StackPanel>
+              <TextBlock x:Name="NoProjects" Text="添加文件夹，开始整理项目" Style="{StaticResource Muted}" Margin="10,5,0,10" TextWrapping="Wrap"/>
+              <StackPanel x:Name="ProjectList"/>
+            </StackPanel>
+          </ScrollViewer>
+          <Button x:Name="ConversationsToggleButton" Grid.Row="2" Margin="0,0,0,5" Style="{StaticResource Ghost}" HorizontalContentAlignment="Left" Padding="8,5" ToolTip="展开或收起全部对话">
+            <StackPanel Orientation="Horizontal"><TextBlock x:Name="ConversationsChevron" Text="&#xE70D;" FontFamily="Segoe MDL2 Assets" FontSize="9" VerticalAlignment="Center" Margin="0,0,8,0"/><TextBlock Text="对话" FontWeight="SemiBold"/></StackPanel>
+          </Button>
+          <Grid x:Name="ConversationsBody" Grid.Row="3">
+            <TextBlock x:Name="NoHistory" Text="暂无 CLI 对话" Style="{StaticResource Muted}" Margin="10,6,0,0"/>
+          <ListBox x:Name="HistoryList" Background="Transparent" BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                   ItemContainerStyle="{StaticResource NavItem}" AutomationProperties.Name="对话">
+            <ListBox.Template>
+              <ControlTemplate TargetType="ListBox">
+                <ScrollViewer Background="{TemplateBinding Background}" Focusable="False" CanContentScroll="True"
+                              HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                  <ItemsPresenter/>
+                </ScrollViewer>
+              </ControlTemplate>
+            </ListBox.Template>
+            <ListBox.ItemTemplate>
+              <DataTemplate>
+                <DockPanel LastChildFill="True" Height="26">
+                  <Button x:Name="SessionMenuButton" DockPanel.Dock="Right" Style="{StaticResource Ghost}"
+                          Width="27" MinHeight="24" Padding="0" Margin="5,0,-4,0" Content="⋯" FontSize="15"
+                          Foreground="{DynamicResource MutedInk}" ToolTip="会话操作" AutomationProperties.Name="会话操作"/>
+                  <TextBlock Text="{Binding Title}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip="{Binding Title}"/>
+                </DockPanel>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+          </Grid>
+        </Grid>
+        <StackPanel Grid.Row="4" Margin="0,12,0,0">
+          <Border Height="1" Background="{DynamicResource Line}" Margin="0,0,0,8"/>
+          <Button x:Name="CliButton" Style="{StaticResource Ghost}" HorizontalContentAlignment="Left" ToolTip="查看或选择本机 Claude CLI">
+            <StackPanel Orientation="Horizontal">
+              <Ellipse x:Name="CliDot" Width="7" Height="7" Fill="{DynamicResource MutedInk}" VerticalAlignment="Center" Margin="1,0,9,0"/>
+              <TextBlock x:Name="CliLabel" Text="正在查找 Claude CLI" TextTrimming="CharacterEllipsis" MaxWidth="163"/>
+            </StackPanel>
+          </Button>
+        </StackPanel>
+      </Grid>
+    </Border>
+    <Grid Grid.Row="1" Grid.Column="1">
+      <Grid x:Name="ChatPage">
+        <Grid.RowDefinitions><RowDefinition Height="76"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <Border BorderBrush="{DynamicResource Line}" BorderThickness="0,0,0,1" Padding="32,0">
+          <DockPanel LastChildFill="True">
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+              <Button x:Name="WorkspaceButton" Style="{StaticResource Ghost}" Content="更换目录" Margin="0,0,8,0"/>
+              <Button x:Name="LogButton" Style="{StaticResource Ghost}" Content="执行日志"/>
+            </StackPanel>
+            <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
+              <TextBlock x:Name="ChatTitle" Text="新建对话" FontSize="16" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+              <TextBlock x:Name="WorkspaceLabel" Style="{StaticResource Muted}" TextTrimming="CharacterEllipsis" FontSize="12" Margin="0,4,0,0"/>
+            </StackPanel>
+          </DockPanel>
+        </Border>
+        <Grid Grid.Row="1">
+          <ScrollViewer x:Name="ConversationScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <StackPanel x:Name="Messages" Margin="36,32,36,16" MaxWidth="780"/>
+          </ScrollViewer>
+          <StackPanel x:Name="Welcome" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="32,20,32,24" MaxWidth="660">
+            <Image Source="{StaticResource BrandIcon}" Width="64" Height="64" Stretch="Uniform" HorizontalAlignment="Left" Margin="0,0,0,24" AutomationProperties.Name="Claude 标识"/>
+            <TextBlock Text="你的想法，下一步。" Style="{StaticResource Muted}" FontSize="14" Margin="0,0,0,10"/>
+            <TextBlock Text="让想法，成为现实。" FontSize="40" FontWeight="Bold" TextWrapping="Wrap"/>
+            <TextBlock Text="和 Claude 一起阅读代码、梳理思路，把手头的工作向前推进。" Style="{StaticResource Muted}"
+                       FontSize="16" LineHeight="27" TextWrapping="Wrap" Margin="0,16,0,0"/>
+            <WrapPanel Margin="0,28,0,0">
+              <Button x:Name="ExplorePromptButton" Content="梳理项目" Padding="14,9" Margin="0,0,10,10" ToolTip="将项目梳理提示填入输入框"/>
+              <Button x:Name="ReviewPromptButton" Content="检查代码" Padding="14,9" Margin="0,0,10,10" ToolTip="将代码检查提示填入输入框"/>
+              <Button x:Name="PlanPromptButton" Content="拆解任务" Padding="14,9" Margin="0,0,0,10" ToolTip="将任务规划提示填入输入框"/>
+            </WrapPanel>
+          </StackPanel>
+        </Grid>
+        <Grid Grid.Row="2" Margin="28,0,28,18" MaxWidth="860">
+          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+          <Border x:Name="ConfigPanel" Visibility="Collapsed" Background="{DynamicResource Panel}" BorderBrush="{DynamicResource Line}"
+                  BorderThickness="1" CornerRadius="6" Padding="13" Margin="0,0,0,8">
+            <Grid>
+              <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+              <StackPanel Margin="0,0,11,0">
+                <TextBlock Text="推理力度" Style="{StaticResource Muted}" Margin="0,0,0,5"/>
+                <ComboBox x:Name="EffortBox" AutomationProperties.Name="推理力度"/>
+              </StackPanel>
+              <StackPanel Grid.Column="1" Margin="0,0,11,0">
+                <TextBlock Text="权限模式" Style="{StaticResource Muted}" Margin="0,0,0,5"/>
+                <ComboBox x:Name="PermissionBox" AutomationProperties.Name="权限模式"/>
+              </StackPanel>
+              <StackPanel Grid.Column="2">
+                <TextBlock Text="最大轮数" Style="{StaticResource Muted}" Margin="0,0,0,5"/>
+                <TextBox x:Name="TurnsBox" Height="32" VerticalContentAlignment="Center" ToolTip="可选，填写大于 0 的整数" AutomationProperties.Name="最大轮数"/>
+              </StackPanel>
+            </Grid>
+          </Border>
+          <Border x:Name="ComposerSurface" Grid.Row="1" Background="{DynamicResource Composer}" BorderBrush="{DynamicResource ComposerLine}"
+                  BorderThickness="1" CornerRadius="28" Padding="14,12,14,12">
+            <Grid>
+              <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+              <Grid Margin="2,0,2,0">
+                <TextBox x:Name="PromptBox" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="76" MaxHeight="145" FontSize="16" BorderThickness="0"
+                         Background="Transparent" Padding="4,8" VerticalScrollBarVisibility="Auto" AutomationProperties.Name="消息"/>
+                <TextBlock x:Name="PromptPlaceholder" Text="和 Claude 一起工作" FontSize="16" IsHitTestVisible="False"
+                           Margin="7,10,0,0" Foreground="{DynamicResource ComposerHint}" VerticalAlignment="Top"/>
+              </Grid>
+              <ScrollViewer Grid.Row="1" MaxHeight="190" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="4,0,4,0">
+                <WrapPanel x:Name="AttachmentList"/>
+              </ScrollViewer>
+              <Grid Grid.Row="2" Margin="0,8,0,0">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                  <Button x:Name="AttachButton" Style="{StaticResource ComposerTool}" Width="36" Padding="0" ToolTip="添加文件，也可拖入文件或 Ctrl+V 粘贴截图" AutomationProperties.Name="添加文件">
+                    <Path Data="M 2,9 L 16,9 M 9,2 L 9,16" Width="18" Height="18" Stretch="Uniform" Stroke="{DynamicResource Ink}" StrokeThickness="1.7" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                  </Button>
+                  <Button x:Name="ConfigButton" Style="{StaticResource ComposerTool}" ToolTip="参数设置：推理力度、权限模式和最大轮数" AutomationProperties.Name="参数设置" Margin="2,0,0,0">
+                    <StackPanel Orientation="Horizontal">
+                      <Path Data="M 2,5 H16 M 2,13 H16 M 6,2 V8 M 12,10 V16" Width="15" Height="15" Stretch="Uniform" Stroke="{DynamicResource MutedInk}" StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Margin="0,0,7,0"/>
+                      <TextBlock Text="参数设置" Foreground="{DynamicResource MutedInk}" FontSize="13" VerticalAlignment="Center"/>
+                    </StackPanel>
+                  </Button>
+                  <Button x:Name="ModelsButton" Style="{StaticResource ComposerTool}" Width="34" Padding="0" ToolTip="模型配置" AutomationProperties.Name="模型配置" Margin="2,0,0,0">
+                    <Path Data="M 9,1 L 17,5 L 17,13 L 9,17 L 1,13 L 1,5 Z M 1,5 L 9,9 L 17,5 M 9,9 V17" Width="16" Height="16" Stretch="Uniform" Stroke="{DynamicResource MutedInk}" StrokeThickness="1.4" StrokeLineJoin="Round"/>
+                  </Button>
+                </StackPanel>
+                <TextBlock x:Name="ConfigSummary" Grid.Column="1" Text="默认参数" Style="{StaticResource Muted}" VerticalAlignment="Center" HorizontalAlignment="Right" FontSize="12" TextTrimming="CharacterEllipsis" Margin="8,0" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                  <ComboBox x:Name="SessionModelBox" Style="{StaticResource ComposerModel}" Width="148" Margin="0,0,8,0" AutomationProperties.Name="选择会话模型"/>
+                  <Button x:Name="StopButton" Style="{StaticResource ComposerTool}" Width="36" Padding="0" Margin="0,0,6,0" Visibility="Collapsed" ToolTip="停止当前请求" AutomationProperties.Name="停止">
+                    <Rectangle Width="12" Height="12" RadiusX="2" RadiusY="2" Fill="{DynamicResource Failure}"/>
+                  </Button>
+                  <Button x:Name="SendButton" Style="{StaticResource ComposerSend}" ToolTip="发送消息（Enter）" AutomationProperties.Name="发送">
+                    <Path Data="M 9,16 V2 M 3,8 L9,2 L15,8" Width="17" Height="17" Stretch="Uniform" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
+                  </Button>
+                </StackPanel>
+              </Grid>
+            </Grid>
+          </Border>
+          <DockPanel Grid.Row="2" Margin="2,8,1,0" LastChildFill="True">
+            <TextBlock DockPanel.Dock="Right" Text="Enter 发送   ·   Ctrl + Enter 换行" Style="{StaticResource Muted}" FontSize="11" Margin="12,0,0,0"/>
+            <StackPanel Orientation="Horizontal">
+              <Ellipse x:Name="ChatDot" Width="7" Height="7" Fill="{DynamicResource MutedInk}" Margin="0,0,7,0"/>
+              <TextBlock x:Name="ChatStatus" Text="就绪" Style="{StaticResource Muted}" FontSize="11" TextTrimming="CharacterEllipsis"/>
+            </StackPanel>
+          </DockPanel>
+        </Grid>
+      </Grid>
+      <Grid x:Name="ToolsPage" Visibility="Collapsed" Margin="36,30,36,24">
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+          <RowDefinition Height="Auto"/><RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+        <DockPanel LastChildFill="True" Margin="0,0,0,16">
+          <Button x:Name="BackButton" DockPanel.Dock="Right" Content="返回对话" VerticalAlignment="Center"/>
+          <StackPanel Margin="0,0,12,0">
+            <TextBlock Text="CLI 工具" FontSize="30" FontWeight="SemiBold"/>
+            <TextBlock Text="在当前工作目录运行 Claude CLI 命令，输出显示在下方。" Style="{StaticResource Muted}" Margin="0,5,0,0" TextWrapping="Wrap"/>
+          </StackPanel>
+        </DockPanel>
+        <WrapPanel x:Name="ActionButtons" Grid.Row="1" Margin="0,0,0,10"/>
+        <Border Grid.Row="2" CornerRadius="9" Padding="10,7" BorderBrush="{DynamicResource Line}" BorderThickness="1" Margin="0,0,0,16">
+          <DockPanel LastChildFill="True">
+            <Button x:Name="PickCliButton" DockPanel.Dock="Right" Content="选择 CLI" Margin="8,0,0,0"/>
+            <Button x:Name="AutoCliButton" DockPanel.Dock="Right" Style="{StaticResource Ghost}" Content="自动查找" Margin="8,0,0,0"/>
+            <TextBlock x:Name="CliPathLabel" Style="{StaticResource Muted}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+          </DockPanel>
+        </Border>
+        <DockPanel Grid.Row="3" LastChildFill="True" Margin="0,0,0,12">
+          <Button x:Name="CopyLogButton" DockPanel.Dock="Right" Content="复制输出" Style="{StaticResource Ghost}" ToolTip="复制完整原始日志，包含命令、输出和退出信息"/>
+          <Button x:Name="ToggleRawLogButton" DockPanel.Dock="Right" Content="原始日志" Style="{StaticResource Ghost}" Margin="0,0,6,0"/>
+          <Button x:Name="StopToolButton" DockPanel.Dock="Right" Content="停止" Visibility="Collapsed" Margin="0,0,8,0"/>
+          <TextBlock Text="执行结果" FontWeight="SemiBold" FontSize="16" VerticalAlignment="Center"/>
+        </DockPanel>
+        <Border Grid.Row="4" CornerRadius="8" Background="{DynamicResource Panel}" BorderBrush="{DynamicResource Line}" BorderThickness="1">
+          <Grid>
+            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+            <Border BorderBrush="{DynamicResource Line}" BorderThickness="0,0,0,1" Padding="20,16">
+              <DockPanel LastChildFill="True">
+                <Border x:Name="ToolBadgeSurface" DockPanel.Dock="Right" Background="{DynamicResource Sidebar}" CornerRadius="4" Padding="10,4" VerticalAlignment="Center" Margin="16,0,0,0">
+                  <TextBlock x:Name="ToolBadge" Text="待运行" Foreground="{DynamicResource MutedInk}" FontSize="12"/>
+                </Border>
+                <StackPanel>
+                  <TextBlock x:Name="ToolResultTitle" Text="让工具，井然有序。" FontWeight="SemiBold" FontSize="18"/>
+                  <TextBlock x:Name="ToolResultDescription" Text="运行一项工具，在这里查看执行结果。" Style="{StaticResource Muted}" Margin="0,5,0,0" FontSize="13" TextWrapping="Wrap"/>
+                </StackPanel>
+              </DockPanel>
+            </Border>
+            <Border x:Name="ToolCommandSurface" Grid.Row="1" Background="{DynamicResource Sidebar}" Padding="20,11" Visibility="Collapsed">
+              <DockPanel>
+                <TextBlock DockPanel.Dock="Left" Text="$" Foreground="#E87550" FontFamily="Consolas" FontWeight="Bold" Margin="0,0,12,0" VerticalAlignment="Top"/>
+                <TextBox x:Name="ToolCommand" IsReadOnly="True" BorderThickness="0" Background="Transparent" Padding="0" FontFamily="Cascadia Mono, Consolas, Microsoft YaHei UI" FontSize="13" TextWrapping="Wrap" AutomationProperties.Name="执行命令"/>
+              </DockPanel>
+            </Border>
+            <Grid Grid.Row="2" MinHeight="60">
+              <RichTextBox x:Name="ToolResultBox" IsReadOnly="True" IsUndoEnabled="False" IsReadOnlyCaretVisible="True" BorderThickness="0"
+                           Background="Transparent" Foreground="{DynamicResource Ink}" Padding="22,20" FontFamily="Segoe UI, Microsoft YaHei UI"
+                           VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" AutomationProperties.Name="格式化执行结果"/>
+              <TextBox x:Name="LogBox" Visibility="Collapsed" IsReadOnly="True" IsReadOnlyCaretVisible="True" AcceptsReturn="True" TextWrapping="Wrap"
+                       Padding="20,16" BorderThickness="0" Background="Transparent" FontSize="13" FontFamily="Cascadia Mono, Consolas, Microsoft YaHei UI"
+                       VerticalScrollBarVisibility="Auto" AutomationProperties.Name="执行输出"/>
+              <StackPanel x:Name="ToolOutputEmpty" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="20" IsHitTestVisible="False">
+                <TextBlock Text="&#xE756;" FontFamily="Segoe MDL2 Assets" FontSize="28" Foreground="{DynamicResource MutedInk}" HorizontalAlignment="Center" Margin="0,0,0,14"/>
+                <TextBlock Text="还没有执行结果" FontSize="16" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                <TextBlock Text="从上方选择工具，输出会实时显示在这里。" Style="{StaticResource Muted}" FontSize="13" Margin="0,8,0,0" TextWrapping="Wrap" TextAlignment="Center"/>
+              </StackPanel>
+            </Grid>
+            <Border Grid.Row="3" BorderBrush="{DynamicResource Line}" BorderThickness="0,1,0,0" Padding="20,11">
+              <DockPanel LastChildFill="True">
+                <TextBlock x:Name="ToolExitCode" DockPanel.Dock="Right" Style="{StaticResource Muted}" FontSize="12" Margin="12,0,0,0"/>
+                <TextBlock x:Name="ToolStatus" Text="选择上方的操作开始" Style="{StaticResource Muted}" FontSize="12" TextTrimming="CharacterEllipsis" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+              </DockPanel>
+            </Border>
+          </Grid>
+        </Border>
+      </Grid>
+      <Grid x:Name="StatsPage" Visibility="Collapsed" Margin="36,30,36,24" Background="{DynamicResource Canvas}">
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*" MinHeight="100"/><RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <DockPanel LastChildFill="True" Margin="0,0,0,12">
+          <Button x:Name="StatsBackButton" DockPanel.Dock="Right" Content="返回对话" VerticalAlignment="Top"/>
+          <StackPanel Margin="0,0,12,0">
+            <TextBlock Text="请求统计" FontSize="28" FontWeight="SemiBold"/>
+            <TextBlock Text="逐次请求的用量与费用 · 实际扣费和参考估算分别显示" Style="{StaticResource Muted}" Margin="0,5,0,0" TextWrapping="Wrap"/>
+          </StackPanel>
+        </DockPanel>
+        <DockPanel Grid.Row="1" Margin="1,0,0,10" LastChildFill="True">
+          <StackPanel VerticalAlignment="Center">
+            <WrapPanel Margin="0,0,0,8">
+              <StackPanel Margin="0,0,8,4"><TextBlock Text="请求 / 执行 ID" Style="{StaticResource Muted}"/><TextBox x:Name="StatsRequestFilter" Width="150" AutomationProperties.Name="请求或执行 ID"/></StackPanel>
+              <StackPanel Margin="0,0,8,4"><TextBlock Text="模型" Style="{StaticResource Muted}"/><ComboBox x:Name="StatsModelFilter" Width="158" AutomationProperties.Name="筛选模型"/></StackPanel>
+              <StackPanel Margin="0,0,8,4"><TextBlock Text="开始日期" Style="{StaticResource Muted}"/><DatePicker x:Name="StatsFromFilter" Width="125" AutomationProperties.Name="开始日期"/></StackPanel>
+              <StackPanel Margin="0,0,8,4"><TextBlock Text="结束日期" Style="{StaticResource Muted}"/><DatePicker x:Name="StatsToFilter" Width="125" AutomationProperties.Name="结束日期"/></StackPanel>
+              <StackPanel Margin="0,0,8,4"><TextBlock Text="状态" Style="{StaticResource Muted}"/><ComboBox x:Name="StatsStatusFilter" Width="100" AutomationProperties.Name="筛选状态"/></StackPanel>
+              <CheckBox x:Name="StatsCurrentOnly" Content="仅当前会话" Foreground="{DynamicResource Ink}" VerticalAlignment="Bottom" Margin="0,0,12,10"/>
+              <Button x:Name="StatsResetFilters" Content="重置" VerticalAlignment="Bottom" Margin="0,0,0,4"/>
+            </WrapPanel>
+            <StackPanel x:Name="StatsOverviewCards" Margin="0,2,0,0"/>
+            <TextBlock x:Name="StatsDateWarning" Foreground="{DynamicResource Failure}" FontSize="12" TextWrapping="Wrap" Visibility="Collapsed" Margin="0,4,0,4"/>
+
+          </StackPanel>
+        </DockPanel>
+        <Border Grid.Row="2" CornerRadius="9" BorderThickness="1" BorderBrush="{DynamicResource Line}" Background="{DynamicResource Panel}">
+          <Grid>
+            <ListView x:Name="StatsRows" SelectionMode="Multiple" Background="Transparent" BorderThickness="0" Foreground="{DynamicResource Ink}"
+                      ScrollViewer.HorizontalScrollBarVisibility="Auto" ScrollViewer.CanContentScroll="True" AutomationProperties.Name="模型请求列表">
+              <ListView.Template>
+                <ControlTemplate TargetType="ListView">
+                  <Border Background="{TemplateBinding Background}" Padding="0,4">
+                    <ScrollViewer Style="{DynamicResource {x:Static GridView.GridViewScrollViewerStyleKey}}"
+                                  HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto" CanContentScroll="True" Focusable="False">
+                      <ItemsPresenter/>
+                    </ScrollViewer>
+                  </Border>
+                </ControlTemplate>
+              </ListView.Template>
+              <ListView.ItemContainerStyle>
+                <Style TargetType="ListViewItem">
+                  <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+                  <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                  <Setter Property="Padding" Value="4,6"/>
+                  <Setter Property="Template">
+                    <Setter.Value>
+                      <ControlTemplate TargetType="ListViewItem">
+                        <Border x:Name="CellRow" Padding="{TemplateBinding Padding}" Background="Transparent" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,0,1">
+                          <GridViewRowPresenter Content="{TemplateBinding Content}" Columns="{TemplateBinding GridView.ColumnCollection}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                          <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="CellRow" Property="Background" Value="{DynamicResource Hover}"/></Trigger>
+                          <Trigger Property="IsSelected" Value="True"><Setter TargetName="CellRow" Property="Background" Value="{DynamicResource Selected}"/></Trigger>
+                        </ControlTemplate.Triggers>
+                      </ControlTemplate>
+                    </Setter.Value>
+                  </Setter>
+                </Style>
+              </ListView.ItemContainerStyle>
+              <ListView.View>
+                <GridView AllowsColumnReorder="False">
+                  <GridView.ColumnHeaderContainerStyle>
+                    <Style TargetType="GridViewColumnHeader">
+                      <Setter Property="Background" Value="{DynamicResource Sidebar}"/>
+                      <Setter Property="Foreground" Value="{DynamicResource MutedInk}"/>
+                      <Setter Property="HorizontalContentAlignment" Value="Left"/>
+                      <Setter Property="Template">
+                        <Setter.Value>
+                          <ControlTemplate TargetType="GridViewColumnHeader">
+                            <Border Background="{TemplateBinding Background}" Padding="9,7" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,0,1">
+                              <ContentPresenter/>
+                            </Border>
+                          </ControlTemplate>
+                        </Setter.Value>
+                      </Setter>
+                    </Style>
+                  </GridView.ColumnHeaderContainerStyle>
+                  <GridViewColumn Header="选择" Width="54">
+                    <GridViewColumn.CellTemplate><DataTemplate>
+                      <CheckBox IsChecked="{Binding IsSelected, RelativeSource={RelativeSource AncestorType={x:Type ListViewItem}}, Mode=TwoWay}"
+                                HorizontalAlignment="Center" VerticalAlignment="Center" Focusable="False" Margin="4,0"
+                                AutomationProperties.Name="选择此请求" ToolTip="勾选多条请求后，点击删除选中"/>
+                    </DataTemplate></GridViewColumn.CellTemplate>
+                  </GridViewColumn>
+                  <GridViewColumn Header="时间" Width="151" DisplayMemberBinding="{Binding TimeText}"/>
+                  <GridViewColumn Header="请求 ID">
+                    <GridViewColumn.CellTemplate><DataTemplate>
+                      <TextBox Text="{Binding RequestId, Mode=OneWay}" Style="{StaticResource SelectableMetadata}" Margin="4,0" AutomationProperties.Name="请求 ID，可选择复制"/>
+                    </DataTemplate></GridViewColumn.CellTemplate>
+                  </GridViewColumn>
+                  <GridViewColumn Header="模型">
+                    <GridViewColumn.CellTemplate><DataTemplate>
+                      <TextBlock Text="{Binding ModelDisplayName}" ToolTip="{Binding ModelDisplayName}" Margin="4,0" VerticalAlignment="Center"/>
+                    </DataTemplate></GridViewColumn.CellTemplate>
+                  </GridViewColumn>
+                  <GridViewColumn Header="状态" Width="72" DisplayMemberBinding="{Binding StatusText}"/>
+                  <GridViewColumn Header="耗时" Width="88" DisplayMemberBinding="{Binding DurationText}"/>
+                  <GridViewColumn Header="网关" Width="138" DisplayMemberBinding="{Binding GatewayText}"/>
+                  <GridViewColumn Header="输入" Width="68" DisplayMemberBinding="{Binding InputText}"/>
+                  <GridViewColumn Header="输出" Width="68" DisplayMemberBinding="{Binding OutputText}"/>
+                  <GridViewColumn Header="结束原因" Width="120" DisplayMemberBinding="{Binding EndReason}"/>
+                  <GridViewColumn Header="配置费用 / 参考估算" Width="165" DisplayMemberBinding="{Binding EstimateText}"/>
+                  <GridViewColumn Header="来源" Width="90" DisplayMemberBinding="{Binding Operation}"/>
+                </GridView>
+              </ListView.View>
+            </ListView>
+            <TextBlock x:Name="StatsEmpty" Text="完成一次模型请求后，记录会显示在这里。" Style="{StaticResource Muted}"
+                       HorizontalAlignment="Center" VerticalAlignment="Center" Margin="12" TextWrapping="Wrap" IsHitTestVisible="False"/>
+          </Grid>
+        </Border>
+        <Grid Grid.Row="3" Margin="0,8,0,0">
+          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+          <WrapPanel Grid.Row="0" Margin="0,0,0,4">
+            <Button x:Name="StatsSelectAll" Content="全选当前结果" Margin="0,0,8,0" ToolTip="只选择当前筛选结果中的请求"/>
+            <Button x:Name="StatsDeselectAll" Content="取消选择" Margin="0,0,8,0"/>
+            <TextBlock x:Name="StatsSelectionCount" Text="已选 0 条" Foreground="{DynamicResource MutedInk}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+            <Button x:Name="StatsDeleteSelected" Content="删除选中" Margin="0,0,8,0" ToolTip="点击行累加选择，Shift 点击连续选择；取消请取消勾选或点击取消选择"/>
+            <Button x:Name="StatsClearAll" Content="清空全部统计" ToolTip="清空所有统计记录，不受当前筛选条件限制"/>
+            <Button x:Name="StatsRatesButton" Content="模型计费标准" Style="{StaticResource Ghost}" Padding="10,4" Margin="10,0,0,0"/>
+          </WrapPanel>
+          <Expander x:Name="StatsDetailsExpander" Grid.Row="1" IsExpanded="False" Foreground="{DynamicResource Ink}" Margin="0,4,0,0">
+            <Expander.Header>
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Text="请求详情" FontWeight="SemiBold" FontSize="13" VerticalAlignment="Center"/>
+                <TextBlock Text="展开后可拖动边界" Foreground="{DynamicResource MutedInk}" FontSize="12" Margin="10,0,0,0" VerticalAlignment="Center"/>
+              </StackPanel>
+            </Expander.Header>
+            <Grid x:Name="StatsDetailFrame" HorizontalAlignment="Left">
+            <Border CornerRadius="8" Background="{DynamicResource Panel}" BorderBrush="{DynamicResource Line}" BorderThickness="1" Margin="0,8,0,0">
+              <ScrollViewer x:Name="StatsDetailScroll" Height="220" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="16,14">
+                <ScrollViewer.Resources><Style TargetType="ScrollBar" BasedOn="{StaticResource QuietScrollBar}"/></ScrollViewer.Resources>
+                <StackPanel>
+                  <TextBox x:Name="StatsRequestId" Style="{StaticResource SelectableMetadata}" TextWrapping="Wrap" FontSize="12" Margin="0,0,0,12" AutomationProperties.Name="完整请求 ID，可选择复制"/>
+                  <StackPanel x:Name="StatsDetailCards"/>
+                  <Expander Header="原始明细" Foreground="{DynamicResource MutedInk}" Margin="0,12,0,0" FontSize="12">
+                    <TextBlock x:Name="StatsDetail" Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="6,10,0,0" FontSize="12"/>
+                  </Expander>
+                </StackPanel>
+              </ScrollViewer>
+            </Border>
+              <Thumb x:Name="StatsDetailWidthGrip" Width="8" HorizontalAlignment="Right" VerticalAlignment="Stretch" Margin="0,8,0,0" Cursor="SizeWE" ToolTip="拖动调整请求详情宽度" AutomationProperties.Name="调整请求详情宽度">
+                <Thumb.Template>
+                  <ControlTemplate TargetType="Thumb">
+                    <Border Background="Transparent"><Border x:Name="Line" Width="2" HorizontalAlignment="Right" Background="{DynamicResource Line}" CornerRadius="1"/></Border>
+                    <ControlTemplate.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Line" Property="Background" Value="{DynamicResource MutedInk}"/></Trigger><Trigger Property="IsDragging" Value="True"><Setter TargetName="Line" Property="Background" Value="{DynamicResource Accent}"/></Trigger></ControlTemplate.Triggers>
+                  </ControlTemplate>
+                </Thumb.Template>
+              </Thumb>
+              <Thumb x:Name="StatsDetailHeightGrip" Height="10" HorizontalAlignment="Stretch" VerticalAlignment="Top" Cursor="SizeNS" ToolTip="拖动调整请求详情高度" AutomationProperties.Name="调整请求详情高度">
+                <Thumb.Template>
+                  <ControlTemplate TargetType="Thumb">
+                    <Border Background="Transparent"><Border x:Name="Handle" Width="36" Height="3" VerticalAlignment="Center" HorizontalAlignment="Center" Background="{DynamicResource MutedInk}" CornerRadius="2" Opacity=".5"/></Border>
+                    <ControlTemplate.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Handle" Property="Opacity" Value="1"/></Trigger></ControlTemplate.Triggers>
+                  </ControlTemplate>
+                </Thumb.Template>
+              </Thumb>
+            </Grid>
+          </Expander>
+          <TextBlock x:Name="StatsWarning" Grid.Row="2" Foreground="{DynamicResource Failure}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+        </Grid>
+      </Grid>
+    </Grid>
+    <Border x:Name="ToolPermissionPanel" Grid.Row="1" Grid.Column="1" Panel.ZIndex="10" Visibility="Collapsed"
+            HorizontalAlignment="Right" VerticalAlignment="Bottom" Width="422" Margin="16"
+            Background="{DynamicResource Panel}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="10" Padding="15">
+      <StackPanel>
+        <TextBlock Text="工具需要授权" FontSize="16" FontWeight="SemiBold"/>
+        <TextBlock x:Name="ToolPermissionName" Margin="0,7,0,0" FontWeight="SemiBold" TextWrapping="Wrap"/>
+        <TextBlock x:Name="ToolPermissionWorkspace" Margin="0,3,0,0" Style="{StaticResource Muted}"
+                   TextTrimming="CharacterEllipsis" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+        <TextBlock x:Name="ToolPermissionReason" Margin="0,3,0,7" Style="{StaticResource Muted}" TextWrapping="Wrap"
+                   MaxHeight="60" TextTrimming="CharacterEllipsis" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+        <TextBox x:Name="ToolPermissionInput" IsReadOnly="True" IsReadOnlyCaretVisible="True" AcceptsReturn="True"
+                 MaxHeight="172" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" FontFamily="Consolas"
+                 AutomationProperties.Name="待授权的工具参数"/>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,11,0,0">
+          <Button x:Name="DenyToolPermission" Content="拒绝并终止" Margin="0,0,8,0"/>
+          <Button x:Name="AllowToolPermission" Content="仅授权本次" Style="{StaticResource Primary}"/>
+        </StackPanel>
+      </StackPanel>
+    </Border>
+    <GridSplitter x:Name="SidebarSplitter" Grid.RowSpan="2" Grid.Column="0" Panel.ZIndex="20"
+                  Width="6" HorizontalAlignment="Right" VerticalAlignment="Stretch" ResizeDirection="Columns"
+                  ResizeBehavior="CurrentAndNext" ShowsPreview="False" Cursor="SizeWE" Background="Transparent"
+                  WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="拖动调整侧边栏宽度" AutomationProperties.Name="调整侧边栏宽度">
+      <GridSplitter.Template>
+        <ControlTemplate TargetType="GridSplitter">
+          <Border Background="Transparent">
+            <Border x:Name="Divider" Width="1" HorizontalAlignment="Right" Background="{DynamicResource Line}"/>
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Divider" Property="Width" Value="2"/><Setter TargetName="Divider" Property="Background" Value="{DynamicResource MutedInk}"/></Trigger>
+            <Trigger Property="IsDragging" Value="True"><Setter TargetName="Divider" Property="Width" Value="2"/><Setter TargetName="Divider" Property="Background" Value="{DynamicResource Accent}"/></Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </GridSplitter.Template>
+    </GridSplitter>
+  </Grid>
+</Window>
