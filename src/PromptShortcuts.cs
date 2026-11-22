@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Windows.Controls;
 using System.Windows.Input;
 
@@ -8,7 +8,7 @@ namespace ClaudeUI
 
     internal static class PromptShortcuts
     {
-        public static void Attach(TextBox prompt, Action send)
+        public static void Attach(TextBox prompt, Action send, Func<KeyEventArgs, bool> complete = null)
         {
             bool composing = false;
             TextCompositionManager.AddPreviewTextInputStartHandler(prompt, (sender, e) => composing = true);
@@ -23,6 +23,7 @@ namespace ClaudeUI
                         composing = false;
                     return;
                 }
+                if (complete != null && complete(e)) { e.Handled = true; return; }
                 if (e.Key != Key.Enter) return;
                 e.Handled = true;
                 if (prompt.IsReadOnly) return;

@@ -102,8 +102,8 @@ namespace ClaudeUI
                 Canvas.SetTop(number, 3);
                 badgeDrawing.Children.Add(number);
                 var countBadge = new Viewbox {
-                    Child = badgeDrawing, Width = 44, Height = 26, Stretch = Stretch.Uniform,
-                    Margin = new Thickness(7, 0, 3, 0), VerticalAlignment = VerticalAlignment.Center,
+                    Child = badgeDrawing, Width = 36, Height = 22, Stretch = Stretch.Uniform,
+                    Margin = new Thickness(5, 0, 2, 0), VerticalAlignment = VerticalAlignment.Center,
                     ToolTip = sessions.Count + " 条会话"
                 };
                 System.Windows.Automation.AutomationProperties.SetName(countBadge, sessions.Count + " 条会话");

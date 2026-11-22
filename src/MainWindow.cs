@@ -39,9 +39,12 @@ namespace ClaudeUI
         private readonly CliRunner runner = new CliRunner();
         private readonly CliSessionLocation sessionLocations;
         private readonly RequestStatisticsView statistics;
+        private readonly MarketplaceView marketplace;
+        private readonly PromptCompletions completions;
+        private readonly ComposerOptionMenus optionMenus;
         private readonly DispatcherTimer timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(65) };
         private readonly List<Button> actions = new List<Button>();
-        private readonly TextBox prompt, log, turns;
+        private readonly TextBox prompt, log;
         private readonly CliOutputView toolOutput;
         private readonly ListBox history;
         private readonly ComboBox effort, permission, sessionModel;
@@ -91,7 +94,6 @@ namespace ClaudeUI
             prompt = Find<TextBox>("PromptBox");
             log = Find<TextBox>("LogBox");
             toolOutput = new CliOutputView(Find<RichTextBox>("ToolResultBox"));
-            turns = Find<TextBox>("TurnsBox");
             effort = Find<ComboBox>("EffortBox");
             permission = Find<ComboBox>("PermissionBox");
             sessionModel = Find<ComboBox>("SessionModelBox");
@@ -105,7 +107,13 @@ namespace ClaudeUI
             statistics = new RequestStatisticsView(window, store.Statistics, data.RequestRates, Save,
                 configuredModels: () => data.ModelProfiles.Select(profile => profile.ModelId), modelProfiles: () => data.ModelProfiles);
             requestDetailResizer = new RequestDetailResizer(window, data, () => Save());
+            marketplace = new MarketplaceView(window, Find<Grid>("MarketplacePage"), data, Save, installContext: () => new MarketplaceInstallContext {
+                Cli = installation, Workspace = current == null ? data.Workspace : current.Workspace, ConfigDirectory = current == null ? null : current.CliConfigDirectory });
+            window.Closed += delegate { marketplace.Dispose(); };
             InitializeOptions();
+            optionMenus = new ComposerOptionMenus(window, () => ((Option)permission.SelectedItem).Value,
+                value => permission.SelectedItem = Select(permission, value), () => ((Option)effort.SelectedItem).Value,
+                value => effort.SelectedItem = Select(effort, value), () => !Busy && !loadingConversation);
             BindButtons();
             Button("ArchivedProjectsButton").Click += delegate {
                 if (Busy) return;
@@ -117,6 +125,12 @@ namespace ClaudeUI
                 Save();
             };
             Theme.Apply(window.Resources, data.Dark);
+            completions = new PromptCompletions(prompt, Find<Border>("ComposerSurface"),
+                () => current == null ? data.Workspace : current.Workspace,
+                () => current == null ? null : current.CliConfigDirectory,
+                () => !Busy && !loadingConversation && !closing, window.Resources);
+            window.Closed += delegate { completions.Dispose(); };
+            window.Deactivated += delegate { completions.Close(); };
             UpdateThemeButton();
             OpenWorkspace(data.Workspace);
             UpdateButtons();
@@ -150,16 +164,12 @@ namespace ClaudeUI
                 new Option("默认", ""), new Option("低", "low"), new Option("中", "medium"),
                 new Option("高", "high"), new Option("很高", "xhigh"), new Option("最高", "max")
             };
-            permission.ItemsSource = new[] {
-                new Option("默认", "default"), new Option("规划模式", "plan"), new Option("接受编辑", "acceptEdits")
-            };
+            permission.ItemsSource = ComposerOptionMenus.Permissions.Select(item => new Option(item.Title, item.Value)).ToArray();
             permission.ToolTip = "需要确认的工具操作会弹出授权提示。接受编辑会按 Claude CLI 规则自动接受文件编辑。";
             effort.SelectedItem = Select(effort, data.Effort);
-            permission.SelectedItem = Select(permission, data.Permission);
-            turns.Text = data.MaxTurns ?? "";
-            turns.TextChanged += delegate { UpdateSummary(); };
-            effort.SelectionChanged += delegate { UpdateSummary(); };
-            permission.SelectionChanged += delegate { UpdateSummary(); };
+            permission.SelectedItem = Select(permission, data.Permission == "manual" ? "default" : data.Permission);
+            effort.SelectionChanged += delegate { UpdateSummary(); CaptureOptions(); Save(); };
+            permission.SelectionChanged += delegate { UpdateSummary(); CaptureOptions(); Save(); };
             UpdateSummary();
         }
 
@@ -173,7 +183,8 @@ namespace ClaudeUI
             Button("NewButton").Click += delegate { Activate(NewConversation()); prompt.Focus(); };
             Button("ToolsButton").Click += delegate { ShowTools(true); };
             Button("StatsButton").Click += delegate { ShowStatistics(); };
-            Button("StatsBackButton").Click += delegate { ShowTools(false); };
+            Button("McpMarketButton").Click += async delegate { await ShowMarketplace(MarketplaceKind.Mcp); };
+            Button("SkillMarketButton").Click += async delegate { await ShowMarketplace(MarketplaceKind.Skill); };
             Button("CliButton").Click += delegate { ShowTools(true); };
             Button("BackButton").Click += delegate { ShowTools(false); };
             Button("LogButton").Click += delegate { ShowTools(true); };
@@ -193,11 +204,8 @@ namespace ClaudeUI
                 try { if (log.Text.Length > 0) Clipboard.SetText(log.Text); }
                 catch (System.Runtime.InteropServices.ExternalException) { Label("ToolStatus").Text = "剪贴板正被占用，请重试。"; }
             };
-            Button("ConfigButton").Click += delegate
-            {
-                var panel = Find<Border>("ConfigPanel");
-                panel.Visibility = Visible(panel.Visibility != Visibility.Visible);
-            };
+            Button("ConfigButton").Click += delegate { optionMenus.ShowPermissions(Button("ConfigButton")); };
+            Button("EffortButton").Click += delegate { optionMenus.ShowEfforts(Button("EffortButton")); };
             BindPromptSuggestion("ExplorePromptButton", "请先梳理当前项目的目录结构，说明主要模块、入口和运行方式。");
             BindPromptSuggestion("ReviewPromptButton", "请检查当前项目的代码，优先找出可能导致错误的问题，并说明原因和修复建议。");
             BindPromptSuggestion("PlanPromptButton", "我想在当前项目中完成一个新任务，请先和我确认目标，再把实现过程拆成可执行的步骤。");
@@ -223,6 +231,8 @@ namespace ClaudeUI
             };
             Button("ModelsButton").Click += delegate { ConfigureModels(); };
             sessionModel.SelectionChanged += FollowModelSelection;
+            var modelMenu = new ContextMenu(); var configureModel = new MenuItem { Header = "模型配置…" };
+            configureModel.Click += delegate { ConfigureModels(); }; modelMenu.Items.Add(configureModel); sessionModel.ContextMenu = modelMenu;
             Button("StopButton").Click += delegate { Stop(); };
             Button("StopToolButton").Click += delegate { Stop(); };
             Button("AllowToolPermission").Click += delegate { if (permissionDecision != null) permissionDecision.TrySetResult(true); };
@@ -230,8 +240,8 @@ namespace ClaudeUI
             Button("ThemeButton").Click += delegate
             {
                 data.Dark = !data.Dark;
-                Theme.Apply(window.Resources, data.Dark);
-                UpdateThemeButton();
+                Theme.Animate(window.Resources, data.Dark);
+                UpdateThemeButton(true);
                 Save();
             };
             Button("MinButton").Click += delegate { SystemCommands.MinimizeWindow(window); };
@@ -249,15 +259,27 @@ namespace ClaudeUI
             };
             window.AddHandler(System.Windows.Controls.Button.ClickEvent, new RoutedEventHandler(OpenSessionMenu));
             window.PreviewMouseRightButtonUp += OpenSessionMenuAtPointer;
+            window.PreviewMouseDown += ReturnToSelectedConversation;
             prompt.TextChanged += delegate
             {
                 Label("PromptPlaceholder").Visibility = Visible(prompt.Text.Length == 0);
                 UpdateButtons();
             };
-            PromptShortcuts.Attach(prompt, async () => await Send());
+            PromptShortcuts.Attach(prompt, async () => await Send(), e => completions != null && completions.HandleKey(e));
+            Find<ContentControl>("CliPathIcon").Content = DeveloperVisuals.Icon("folder-open");
+            Find<ContentControl>("ToolEmptyIcon").Content = DeveloperVisuals.Icon("terminal", 34, "SubtleInk");
+            Button("PickCliButton").Content = DeveloperVisuals.ButtonContent("folder-open", "选择 CLI");
+            Button("AutoCliButton").Content = DeveloperVisuals.ButtonContent("search", "自动查找");
+            Button("CopyLogButton").Content = DeveloperVisuals.ButtonContent("copy", "复制输出");
+            Button("ModelsButton").Content = DeveloperVisuals.Icon("blocks", 16);
             foreach (var command in CliAction.All)
             {
-                var button = new Button { Content = command.Name, ToolTip = command.Description, Margin = new Thickness(0, 0, 8, 8) };
+                string icon = command.Name == "版本" ? "badge-info" : command.Name == "健康诊断" ? "stethoscope" :
+                    command.Name == "登录状态" ? "shield-check" : command.Name == "MCP 服务" ? "blocks" :
+                    command.Name == "插件列表" ? "plug" : command.Name == "后台任务" ? "list-todo" : "circle-help";
+                var button = new Button { Content = DeveloperVisuals.ButtonContent(icon, command.Name), ToolTip = command.Description,
+                    Style = (Style)window.Resources["ToolPill"], Margin = new Thickness(0, 0, 8, 8) };
+                System.Windows.Automation.AutomationProperties.SetName(button, command.Name);
                 button.Click += async delegate { await RunAction(command); };
                 Find<WrapPanel>("ActionButtons").Children.Add(button);
                 actions.Add(button);
@@ -534,6 +556,33 @@ namespace ClaudeUI
             ShowSessionMenu(conversation, button, System.Windows.Controls.Primitives.PlacementMode.Bottom);
         }
 
+        private void ReturnToSelectedConversation(object sender, MouseButtonEventArgs e)
+        {
+            if (e.ChangedButton != MouseButton.Left) return;
+            if (Find<Grid>("ChatPage").Visibility == Visibility.Visible) return;
+            var source = e.OriginalSource as DependencyObject;
+            while (source != null)
+            {
+                // The row's menu remains a separate action, even for the active conversation.
+                if (source is System.Windows.Controls.Primitives.ButtonBase) return;
+                var row = source as ListBoxItem;
+                if (row != null)
+                {
+                    var list = ItemsControl.ItemsControlFromItemContainer(row);
+                    bool sidebar = list == history || (list != null && Find<StackPanel>("ProjectList").IsAncestorOf(list));
+                    if (sidebar && row.DataContext == current)
+                    {
+                        ShowTools(false);
+                        e.Handled = true;
+                    }
+                    return;
+                }
+                var content = source as FrameworkContentElement;
+                source = content != null ? content.Parent : source is Visual || source is System.Windows.Media.Media3D.Visual3D
+                    ? VisualTreeHelper.GetParent(source) : LogicalTreeHelper.GetParent(source);
+            }
+        }
+
         private void OpenSessionMenuAtPointer(object sender, MouseButtonEventArgs e)
         {
             var source = e.OriginalSource as DependencyObject;
@@ -790,8 +839,26 @@ namespace ClaudeUI
             Find<StackPanel>("Welcome").Visibility = Visible(current.Messages.Count == 0);
         }
 
+        private void HighlightNavigation(string name)
+        {
+            foreach (string item in new[] { "ToolsButton", "McpMarketButton", "SkillMarketButton", "StatsButton" })
+                Button(item).Tag = item == name ? "Active" : null;
+        }
+
+        private async Task ShowMarketplace(MarketplaceKind kind)
+        {
+            HighlightNavigation(kind == MarketplaceKind.Mcp ? "McpMarketButton" : "SkillMarketButton");
+            Find<Grid>("ChatPage").Visibility = Visibility.Collapsed;
+            Find<Grid>("ToolsPage").Visibility = Visibility.Collapsed;
+            Find<Grid>("StatsPage").Visibility = Visibility.Collapsed;
+            Find<Grid>("MarketplacePage").Visibility = Visibility.Visible;
+            await marketplace.Open(kind);
+        }
+
         private void ShowTools(bool show)
         {
+            HighlightNavigation(show ? "ToolsButton" : null);
+            Find<Grid>("MarketplacePage").Visibility = Visibility.Collapsed;
             Find<Grid>("StatsPage").Visibility = Visibility.Collapsed;
             Find<Grid>("ToolsPage").Visibility = Visible(show);
             Find<Grid>("ChatPage").Visibility = Visible(!show);
@@ -799,6 +866,8 @@ namespace ClaudeUI
 
         private void ShowStatistics()
         {
+            HighlightNavigation("StatsButton");
+            Find<Grid>("MarketplacePage").Visibility = Visibility.Collapsed;
             Find<Grid>("ChatPage").Visibility = Visibility.Collapsed;
             Find<Grid>("ToolsPage").Visibility = Visibility.Collapsed;
             Find<Grid>("StatsPage").Visibility = Visibility.Visible;
@@ -945,9 +1014,65 @@ namespace ClaudeUI
             }
         }
 
+        // 客户端已有入口在本地路由；Skill、自定义命令和 /compact 原样交给 CLI。
+        private async Task<bool> HandleComposerCommand(string text)
+        {
+            var match = Regex.Match(text, @"^/([a-zA-Z0-9_-]+)(?:\s+(.*))?$", RegexOptions.Singleline);
+            if (!match.Success) return false;
+            string name = match.Groups[1].Value.ToLowerInvariant(), argument = match.Groups[2].Value.Trim();
+            if (!new[] { "help", "new", "clear", "model", "effort", "permissions", "plan", "mcp", "skills", "plugin", "doctor", "status" }.Contains(name)) return false;
+            if (name == "model" && argument.Length > 0)
+            {
+                var profile = data.ModelProfiles.FirstOrDefault(item => String.Equals(item.Name, argument, StringComparison.OrdinalIgnoreCase) || String.Equals(item.ModelId, argument, StringComparison.OrdinalIgnoreCase));
+                var choice = argument == "default" || argument == "本机默认" ? Select(sessionModel, "") : profile == null ? null : Select(sessionModel, profile.Id);
+                if (choice == null) { ChatStatus("未找到该模型配置，可使用 /model 打开配置。", "Failure"); return true; }
+                sessionModel.SelectedItem = choice;
+            }
+            else if (name == "effort" && argument.Length > 0)
+            {
+                var choice = effort.Items.Cast<Option>().FirstOrDefault(item => String.Equals(item.Value, argument, StringComparison.OrdinalIgnoreCase) || item.ToString() == argument);
+                if (choice == null) { ChatStatus("推理力度：low、medium、high、xhigh、max，或使用 /effort 打开设置。", "Failure"); return true; }
+                effort.SelectedItem = choice; CaptureOptions(); Save();
+            }
+            else if (argument.Length > 0) return false;
+            else
+            {
+                if (name == "new" || name == "clear") { prompt.Clear(); current.Draft = ""; Activate(NewConversation()); Save(); }
+                else if (name == "model") ConfigureModels();
+                else if (name == "effort" || name == "permissions" || name == "plan")
+                {
+                    if (name == "plan") { permission.SelectedItem = Select(permission, "plan"); CaptureOptions(); Save(); }
+                    if (name == "effort") optionMenus.ShowEfforts(Button("EffortButton"));
+                    else optionMenus.ShowPermissions(Button("ConfigButton"));
+                }
+                else if (name == "status") ShowStatistics();
+                else if (name == "mcp") await ShowMarketplace(MarketplaceKind.Mcp);
+                else if (name == "skills") await ShowMarketplace(MarketplaceKind.Skill);
+                else
+                {
+                    ShowTools(true);
+                    string label = name == "doctor" ? "健康诊断" : name == "plugin" ? "插件列表" : "CLI 帮助";
+                    if (installation != null) await RunAction(CliAction.All.First(action => action.Name == label));
+                    else ChatStatus("尚未找到 Claude CLI，请先选择本机可执行文件。", "Failure");
+                }
+            }
+            if (completions != null) completions.Close();
+            prompt.Clear(); current.Draft = ""; Save();
+            return true;
+        }
+
+        private RequestOptions ChatOptions(bool compacting)
+        {
+            var selected = ActiveModel;
+            return new RequestOptions { Model = selected == null ? null : selected.ModelId,
+                Effort = data.Effort, Permission = data.Permission, SessionId = current.SessionId, AskToolPermission = !compacting };
+        }
+
         private async Task Send(string command = null)
         {
             string text = command ?? prompt.Text.Trim();
+            if (Busy || loadingConversation || current == null) return;
+            if (command == null && text.StartsWith("/", StringComparison.Ordinal) && current.DraftAttachments.Count == 0 && await HandleComposerCommand(text)) return;
             var attachments = command == null ? new List<ChatAttachment>(current.DraftAttachments) : new List<ChatAttachment>();
             if (Busy || loadingConversation || installation == null || (String.IsNullOrWhiteSpace(text) && attachments.Count == 0)) return;
             if (MissingModelProfile)
@@ -982,13 +1107,6 @@ namespace ClaudeUI
                     return;
                 }
             }
-            int maximum;
-            if (!compacting && turns.Text.Trim().Length > 0 && (!Int32.TryParse(turns.Text, out maximum) || maximum < 1))
-            {
-                Find<Border>("ConfigPanel").Visibility = Visibility.Visible;
-                ChatStatus("最大轮数必须是大于 0 的整数。", "Failure");
-                return;
-            }
             if (text.Length > 1000000)
             {
                 ChatStatus("消息超过 100 万字符，请缩短后再发送。", "Failure");
@@ -1006,11 +1124,7 @@ namespace ClaudeUI
                 ChatStatus("无法读取附件 · " + ex.Message, "Failure");
                 return;
             }
-            var options = new RequestOptions {
-                Model = selected == null ? null : selected.ModelId, Effort = data.Effort, Permission = data.Permission,
-                MaxTurns = !compacting && Int32.TryParse(turns.Text, out maximum) ? (int?)maximum : null,
-                SessionId = current.SessionId, AskToolPermission = !compacting
-            };
+            var options = ChatOptions(compacting);
             if (!compacting)
             {
                 if (current.Messages.Count == 0) current.Title = TitleFrom(text);
@@ -1398,6 +1512,7 @@ namespace ClaudeUI
 
         private void SetToolBadge(string text, string foreground, string background)
         {
+            Find<System.Windows.Shapes.Ellipse>("ToolPulseDot").SetResourceReference(System.Windows.Shapes.Shape.FillProperty, foreground);
             Label("ToolBadge").Text = text;
             Label("ToolBadge").SetResourceReference(TextBlock.ForegroundProperty, foreground);
             Find<Border>("ToolBadgeSurface").SetResourceReference(Border.BackgroundProperty, background);
@@ -1519,14 +1634,16 @@ namespace ClaudeUI
 
         private void UpdateButtons()
         {
-            foreach (var name in new[] { "NewButton", "WorkspaceButton", "AddProjectButton", "PickCliButton", "AutoCliButton", "ConfigButton", "ModelsButton" })
+            foreach (var name in new[] { "NewButton", "WorkspaceButton", "AddProjectButton", "PickCliButton", "AutoCliButton", "ConfigButton", "ModelsButton", "EffortButton" })
                 Button(name).IsEnabled = !Busy;
             foreach (Button command in actions) command.IsEnabled = installation != null && !Busy;
             history.IsEnabled = !Busy;
             Find<StackPanel>("ProjectList").IsEnabled = !Busy;
             prompt.IsReadOnly = Busy;
+            if (Busy && completions != null) completions.Close();
             sessionModel.IsEnabled = !Busy;
-            Find<Border>("ConfigPanel").IsEnabled = !Busy;
+            permission.IsEnabled = effort.IsEnabled = !Busy;
+            if (Busy) optionMenus.Close();
             Button("AttachButton").IsEnabled = !Busy && !loadingConversation;
             Find<WrapPanel>("AttachmentList").IsEnabled = !Busy && !loadingConversation;
             Button("SendButton").IsEnabled = installation != null && !Busy && !loadingConversation && !MissingModelProfile &&
@@ -1544,23 +1661,31 @@ namespace ClaudeUI
 
         private void UpdateSummary()
         {
-            var details = new List<string>();
-            var selected = permission.SelectedItem as Option;
-            if (selected != null && selected.Value != "default") details.Add(selected.ToString());
-            var effortOption = effort.SelectedItem as Option;
-            if (effortOption != null && effortOption.Value.Length > 0) details.Add("推理 " + effortOption);
-            if (turns.Text.Trim().Length > 0) details.Add(turns.Text.Trim() + " 轮");
-            Label("ConfigSummary").Text = details.Count == 0 ? "默认参数" : String.Join(" · ", details);
+            var permissionChoice = permission.SelectedItem as Option;
+            var effortChoice = effort.SelectedItem as Option;
+            var mode = ComposerOptionMenus.Permission(permissionChoice == null ? null : permissionChoice.Value);
+            var level = ComposerOptionMenus.Effort(effortChoice == null ? null : effortChoice.Value);
+            Label("PermissionSummary").Text = mode.Title;
+            Label("PermissionSummary").SetResourceReference(TextBlock.ForegroundProperty, mode.Caution ? "PermissionWarning" : "MutedInk");
+            Label("ConfigSummary").Text = level.Title;
+            Button("ConfigButton").ToolTip = mode.Title + " · " + mode.Description;
+            Button("EffortButton").ToolTip = "推理强度：" + level.Title + " · " + level.Description;
         }
 
         private void CaptureOptions()
         {
-            data.MaxTurns = turns.Text.Trim();
             data.Effort = ((Option)effort.SelectedItem).Value;
             data.Permission = ((Option)permission.SelectedItem).Value;
         }
 
-        private void UpdateThemeButton() { Button("ThemeButton").Content = data.Dark ? "浅色主题" : "深色主题"; }
+        private void UpdateThemeButton(bool animate = false)
+        {
+            var button = Button("ThemeButton");
+            ThemeToggleIcon.Update(button, data.Dark, animate);
+            button.Tag = data.Dark ? "True" : "False";
+            button.ToolTip = data.Dark ? "切换为浅色主题" : "切换为深色主题";
+            System.Windows.Automation.AutomationProperties.SetName(button, (string)button.ToolTip);
+        }
 
         private bool Save()
         {

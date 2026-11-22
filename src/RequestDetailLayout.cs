@@ -51,9 +51,6 @@ namespace ClaudeUI
             host.Children.Add(tokens);
             Field("输入总量", row.InputText + (row.Incomplete ? "（仅收到部分数据）" : ""));
             if (row.CacheWrite1Hour.HasValue) Field("1 小时缓存写入", Number(row.CacheWrite1Hour));
-            var cache = Text(PromptCachePolicy.Describe(row), 12, "MutedInk");
-            cache.Margin = new Thickness(0, 5, 0, 2);
-            host.Children.Add(cache);
 
             Section("费用");
             var costs = new WrapPanel();

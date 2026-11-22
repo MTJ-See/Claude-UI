@@ -5,6 +5,7 @@ using System.Text;
 using System.Web.Script.Serialization;
 using System.Windows;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 
 namespace ClaudeUI
 {
@@ -52,6 +53,8 @@ namespace ClaudeUI
     public sealed class AppData
     {
         public bool Dark { get; set; }
+        public string MarketplaceModelScopeToken { get; set; }
+        public string MarketplaceGitHubToken { get; set; }
         public double SidebarWidth { get; set; }
         public double RequestDetailWidth { get; set; }
         public double RequestDetailHeight { get; set; }
@@ -67,7 +70,6 @@ namespace ClaudeUI
         public string Model { get; set; }
         public string Effort { get; set; }
         public string Permission { get; set; }
-        public string MaxTurns { get; set; }
         public List<Conversation> Conversations { get; set; }
         public List<ModelProfile> ModelProfiles { get; set; }
         public List<RequestRate> RequestRates { get; set; }
@@ -141,38 +143,78 @@ namespace ClaudeUI
 
     internal static class Theme
     {
+        public static readonly TimeSpan TransitionDuration = TimeSpan.FromMilliseconds(400);
+
+        public static void Animate(ResourceDictionary resources, bool dark)
+        {
+            if (!SystemParameters.ClientAreaAnimation) { Apply(resources, dark); return; }
+            var palette = new ResourceDictionary();
+            Apply(palette, dark);
+            foreach (string key in palette.Keys)
+            {
+                var target = (SolidColorBrush)palette[key];
+                var brush = resources[key] as SolidColorBrush;
+                if (brush == null || brush.IsFrozen) { resources[key] = target; continue; }
+                Color current = brush.Color;
+                brush.BeginAnimation(SolidColorBrush.ColorProperty, null);
+                brush.Color = target.Color;
+                brush.BeginAnimation(SolidColorBrush.ColorProperty, new ColorAnimation(current, target.Color, TransitionDuration) {
+                    EasingFunction = new CubicEase { EasingMode = EasingMode.EaseInOut }, FillBehavior = FillBehavior.Stop
+                }, HandoffBehavior.SnapshotAndReplace);
+            }
+        }
+
         public static void Apply(ResourceDictionary resources, bool dark)
         {
-            Set(resources, "Canvas", dark ? "#191919" : "#FFFFFF");
-            Set(resources, "Sidebar", dark ? "#202020" : "#F7F7F5");
-            Set(resources, "Panel", dark ? "#232323" : "#FFFFFF");
-            Set(resources, "Composer", dark ? "#303030" : "#F4F4F3");
-            Set(resources, "ComposerLine", dark ? "#3C3C3C" : "#E7E7E4");
-            Set(resources, "ComposerHover", dark ? "#3D3D3D" : "#E7E7E4");
-            Set(resources, "ComposerHint", dark ? "#969692" : "#83837F");
-            Set(resources, "SendAction", dark ? "#3778D6" : "#2F6DCE");
-            Set(resources, "Hover", dark ? "#2C2C2C" : "#ECECE9");
-            Set(resources, "Selected", dark ? "#343434" : "#EEEEEB");
-            Set(resources, "Line", dark ? "#363636" : "#E6E6E3");
-            Set(resources, "Ink", dark ? "#F1F1EF" : "#242424");
-            Set(resources, "MutedInk", dark ? "#ADADA8" : "#73736E");
-            Set(resources, "Accent", dark ? "#EEEEEC" : "#242424");
-            Set(resources, "AccentInk", dark ? "#202020" : "#FFFFFF");
-            Set(resources, "UserInk", dark ? "#A5C9ED" : "#315C85");
-            Set(resources, "UserSurface", dark ? "#253446" : "#EEF4FA");
-            Set(resources, "AssistantInk", dark ? "#F0AC91" : "#A64D30");
-            Set(resources, "AssistantSurface", dark ? "#3E2E28" : "#FBEFE9");
-            Set(resources, "Success", dark ? "#76C8A3" : "#207653");
-            Set(resources, "SuccessSurface", dark ? "#233B30" : "#EDF5EF");
-            Set(resources, "FailureSurface", dark ? "#442B2A" : "#FBEFEE");
-            Set(resources, "Failure", dark ? "#FF9C93" : "#A53232");
+            Set(resources, "Terminal", dark ? "#0F0F12" : "#FFFFFF");
+            Set(resources, "InputSurface", dark ? "#202024" : "#FFFFFF");
+            Set(resources, "IconTile", dark ? "#27272A" : "#F0F0F5");
+            Set(resources, "SubtleInk", dark ? "#85858F" : "#71717A");
+            Set(resources, "CardHoverLine", dark ? "#45454E" : "#CAC7D4");
+            Set(resources, "PrimaryAction", dark ? "#7C3AED" : "#7C3AED");
+            Set(resources, "PermissionWarning", dark ? "#FB923C" : "#B54708");
+            Set(resources, "Warning", dark ? "#FBBF24" : "#946000");
+            Set(resources, "WarningSurface", dark ? "#332B1C" : "#FFF4D8");
+            Set(resources, "ThemeTrack", dark ? "#111215" : "#E8E6E1");
+            Set(resources, "ThemeKnob", dark ? "#292C3C" : "#FFF0CD");
+            Set(resources, "ThemeKnobLine", dark ? "#7279AA" : "#F5D58B");
+            Set(resources, "HeroSurface", dark ? "#242035" : "#F4F2FF");
+            Set(resources, "HeroLine", dark ? "#333150" : "#E9E5FF");
+            Set(resources, "Canvas", dark ? "#121215" : "#F7F9FD");
+            Set(resources, "Sidebar", dark ? "#18181B" : "#FFFFFF");
+            Set(resources, "Panel", dark ? "#18181B" : "#FFFFFF");
+            Set(resources, "Composer", dark ? "#333333" : "#F1F1F3");
+            Set(resources, "ComposerLine", dark ? "#454545" : "#DEDEE3");
+            Set(resources, "ComposerHover", dark ? "#414141" : "#E4E4E8");
+            Set(resources, "ComposerHint", dark ? "#929292" : "#797982");
+            Set(resources, "SendAction", dark ? "#2F6DCE" : "#2F6DCE");
+            Set(resources, "Hover", dark ? "#242428" : "#F3F5FA");
+            Set(resources, "Selected", dark ? "#2A243B" : "#F4F2FF");
+            Set(resources, "Line", dark ? "#29292F" : "#E7E7EC");
+            Set(resources, "Ink", dark ? "#E4E4E7" : "#272534");
+            Set(resources, "MutedInk", dark ? "#A1A1AA" : "#64646F");
+            Set(resources, "Accent", dark ? "#B7A2FF" : "#6D28D9");
+            Set(resources, "AccentInk", dark ? "#FFFFFF" : "#FFFFFF");
+            Set(resources, "UserInk", dark ? "#C8BFFF" : "#624AFF");
+            Set(resources, "UserSurface", dark ? "#2D2B4D" : "#F4F2FF");
+            Set(resources, "AssistantInk", dark ? "#C8BFFF" : "#624AFF");
+            Set(resources, "AssistantSurface", dark ? "#2D2B4D" : "#F4F2FF");
+            Set(resources, "Success", dark ? "#6EE7B7" : "#18794E");
+            Set(resources, "SuccessSurface", dark ? "#153329" : "#E9F8EF");
+            Set(resources, "FailureSurface", dark ? "#3B2024" : "#FDEDEE");
+            Set(resources, "Failure", dark ? "#FCA5A5" : "#B42332");
         }
 
         private static void Set(ResourceDictionary resources, string name, string value)
         {
-            var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(value));
-            brush.Freeze();
-            resources[name] = brush;
+            Color color = (Color)ColorConverter.ConvertFromString(value);
+            var brush = resources[name] as SolidColorBrush;
+            if (brush == null || brush.IsFrozen) resources[name] = new SolidColorBrush(color);
+            else
+            {
+                brush.BeginAnimation(SolidColorBrush.ColorProperty, null);
+                brush.Color = color;
+            }
         }
     }
 }

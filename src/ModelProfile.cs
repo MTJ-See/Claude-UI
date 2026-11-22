@@ -17,7 +17,6 @@ namespace ClaudeUI
         public string BaseUrl { get; set; }
         public string Authentication { get; set; }
         public string ProtectedCredential { get; set; }
-        public string PromptCaching { get; set; }
 
         internal bool UsesEndpoint { get { return !String.IsNullOrWhiteSpace(BaseUrl); } }
 
@@ -54,12 +53,12 @@ namespace ClaudeUI
 
         internal IDictionary<string, string> CliEnvironment()
         {
-            if (!UsesEndpoint) return PromptCachePolicy.Apply(PromptCaching, null);
+            if (!UsesEndpoint) return null;
             string endpoint = NormalizeEndpoint(BaseUrl);
             if (endpoint == null || !IsModelId(ModelId) || (Authentication != Bearer && Authentication != ApiKey))
                 throw new InvalidOperationException("模型配置无效，请在「模型配置」中检查端点、模型 ID 和认证方式。");
             string credential = ReadCredential();
-            return PromptCachePolicy.Apply(PromptCaching, new Dictionary<string, string> {
+            return new Dictionary<string, string> {
                 { "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST", "1" },
                 { "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1" },
                 { "CLAUDE_CODE_USE_BEDROCK", null },
@@ -78,7 +77,7 @@ namespace ClaudeUI
                 { "ANTHROPIC_DEFAULT_SONNET_MODEL", ModelId },
                 { "ANTHROPIC_DEFAULT_OPUS_MODEL", ModelId },
                 { "CLAUDE_CODE_SUBAGENT_MODEL", ModelId }
-            });
+            };
         }
 
         private string ReadCredential()

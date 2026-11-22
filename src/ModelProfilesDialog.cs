@@ -16,7 +16,7 @@ namespace ClaudeUI
         private readonly ListBox list;
         private readonly TextBox name, modelId, endpoint;
         private readonly CheckBox custom;
-        private readonly ComboBox authentication, promptCaching;
+        private readonly ComboBox authentication;
         private readonly PasswordBox credential;
         private readonly TextBlock hint, status;
         private readonly StackPanel endpointFields;
@@ -70,10 +70,6 @@ namespace ClaudeUI
             name = AddField(fields, "显示名称", new TextBox { MaxLength = 60 });
             modelId = AddField(fields, "模型 ID", new TextBox { MaxLength = 256 });
             modelId.ToolTip = "填写服务商提供的模型 ID，例如 deepseek-flash。也可填写本机 Claude CLI 支持的模型别名。";
-            promptCaching = AddField(fields, "上下文缓存", new ComboBox {
-                ItemsSource = PromptCachePolicy.Labels, SelectedIndex = 0
-            });
-            promptCaching.ToolTip = "完整保留输入，复用服务端前缀计算；不会减少上下文 token 数。TTL 控制需要 CLI 2.1.242+，端点须支持缓存。1 小时写入较贵，短会话可能增加费用。只对本次 CLI 子进程生效。";
             custom = new CheckBox { Content = "使用自定义 API 端点", Margin = new Thickness(0, 12, 0, 0) };
             custom.SetResourceReference(Control.ForegroundProperty, "Ink");
             fields.Children.Add(custom);
@@ -116,7 +112,6 @@ namespace ClaudeUI
             custom.Checked += delegate { UpdateEndpointFields(); status.Text = ""; };
             custom.Unchecked += delegate { UpdateEndpointFields(); status.Text = ""; };
             modelId.TextChanged += delegate { status.Text = ""; };
-            promptCaching.SelectionChanged += delegate { status.Text = ""; };
             endpoint.TextChanged += delegate { status.Text = ""; };
             authentication.SelectionChanged += delegate { status.Text = ""; };
             credential.PasswordChanged += delegate { status.Text = ""; };
@@ -167,8 +162,6 @@ namespace ClaudeUI
             editing = profile;
             name.Text = profile == null ? "" : profile.Name;
             modelId.Text = profile == null ? "" : profile.ModelId;
-            promptCaching.SelectedIndex = profile == null || String.IsNullOrEmpty(profile.PromptCaching)
-                ? 0 : Array.IndexOf(PromptCachePolicy.Values, profile.PromptCaching);
             endpoint.Text = profile == null ? "" : ModelProfile.NormalizeEndpoint(profile.BaseUrl) ?? profile.BaseUrl ?? "";
             authentication.SelectedIndex = profile != null && profile.Authentication == ModelProfile.ApiKey ? 1 : 0;
             credential.Clear();
@@ -231,12 +224,6 @@ namespace ClaudeUI
 
         private ModelProfile ReadProfile(bool requireName)
         {
-            if (promptCaching.SelectedIndex < 0)
-            {
-                ShowStatus("请选择有效的上下文缓存策略。", "Failure");
-                promptCaching.Focus();
-                return null;
-            }
             string title = name.Text.Trim(), model = modelId.Text.Trim();
             if (requireName && (title.Length == 0 || title.Any(Char.IsControl) || title == "本机默认" ||
                 profiles.Any(item => item != editing && String.Equals(item.Name, title, StringComparison.OrdinalIgnoreCase))))
@@ -252,8 +239,7 @@ namespace ClaudeUI
                 return null;
             }
             var profile = new ModelProfile {
-                Id = editing == null ? Guid.NewGuid().ToString() : editing.Id, Name = title, ModelId = model,
-                PromptCaching = PromptCachePolicy.Values[promptCaching.SelectedIndex]
+                Id = editing == null ? Guid.NewGuid().ToString() : editing.Id, Name = title, ModelId = model
             };
             if (custom.IsChecked == true)
             {

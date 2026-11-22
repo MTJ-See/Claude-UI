@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -102,7 +102,6 @@ namespace ClaudeUI
     internal sealed class RequestOptions
     {
         public string Model, Effort, Permission, SessionId;
-        public int? MaxTurns;
         public bool AskToolPermission;
 
         public string[] Arguments()
@@ -114,7 +113,6 @@ namespace ClaudeUI
             if (AskToolPermission) arguments.AddRange(new[] { "--permission-prompt-tool", "stdio" });
             if (!String.IsNullOrEmpty(Model)) arguments.AddRange(new[] { "--model", Model });
             if (!String.IsNullOrEmpty(Effort)) arguments.AddRange(new[] { "--effort", Effort });
-            if (MaxTurns.HasValue) arguments.AddRange(new[] { "--max-turns", MaxTurns.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) });
             if (!String.IsNullOrEmpty(SessionId)) arguments.AddRange(new[] { "--resume", SessionId });
             return arguments.ToArray();
         }

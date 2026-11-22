@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -213,7 +213,6 @@ namespace ClaudeUI
                 "未缓存 " + row.Input.Value.ToString("N0") + "  ·  写缓存 " + (row.CacheWrite ?? 0).ToString("N0") +
                 "  ·  读缓存 " + (row.CacheRead ?? 0).ToString("N0") : "未收到 token 用量";
             Label("StatsDetail").Text = usage + (row.Incomplete ? "（仅收到部分数据）" : "") + "  ·  " + cost + Environment.NewLine +
-                PromptCachePolicy.Describe(row) + Environment.NewLine +
                 "请求 " + (row.RequestId ?? "历史记录未保存") + " · 执行 " + (row.RunId ?? "—") + " · " + row.StatusText + " · " + row.DurationText + Environment.NewLine +
                 "耗时口径：" + (row.TimingSource ?? "历史记录无耗时") + " · 完成时间 " + (row.CompletedUtc ?? "—") + Environment.NewLine +
                 (row.RunDurationMs.HasValue ? "本轮 CLI 总耗时 " + (row.RunDurationMs.Value / 1000d).ToString("0.000", CultureInfo.InvariantCulture) + " s（含等待）" + Environment.NewLine : "") +

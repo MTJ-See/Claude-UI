@@ -23,18 +23,6 @@ namespace ClaudeUI
                 Console.WriteLine("2.1.318 (Claude Code)");
                 return args.Contains("--version") ? 0 : 1;
             }
-            if (args.Contains("__cache_fixture__"))
-            {
-                Console.InputEncoding = Encoding.UTF8;
-                Console.OutputEncoding = new UTF8Encoding(false);
-                Console.WriteLine(new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(new {
-                    Input = Console.In.ReadToEnd(),
-                    Disabled = Environment.GetEnvironmentVariable("DISABLE_PROMPT_CACHING"),
-                    Ttl = Environment.GetEnvironmentVariable("CLAUDE_CODE_PROMPT_CACHE_TTL"),
-                    Force = Environment.GetEnvironmentVariable("FORCE_PROMPT_CACHING_5M")
-                }));
-                return 0;
-            }
             // Reuse the smoke executable as a deterministic CLI child process to exercise probe callbacks.
             if (args.Contains("__usage_fixture_success__") || args.Contains("__usage_fixture_multi__") ||
                 args.Contains("__usage_fixture_response_exit_error__") || args.Contains("__usage_fixture_missing_result__"))
@@ -64,6 +52,9 @@ namespace ClaudeUI
             try
             {
                 var store = new DataStore(work);
+                CheckThemeTransitions();
+                CheckNativeDeveloperVisuals();
+                CheckPromptCompletions(work);
                 CheckCliUpdate(work);
                 CheckHistoryMerge(work);
                 CheckReplyTurnGrouping(work);
@@ -88,7 +79,6 @@ namespace ClaudeUI
                         }
                     }
                 }
-                CheckPromptCache(work);
                 CheckPortableData(work);
                 store.Save(new AppData { Dark = true, Workspace = work });
                 string settingsFile = Path.Combine(work, "state.json");
@@ -134,7 +124,6 @@ namespace ClaudeUI
                 var controller = new MainWindow(store);
                 var window = controller.View;
                 window.ApplyTemplate();
-                CheckPromptCacheDialog(window);
                 CheckAttachments(controller, store, work);
                 Check(window.FindName("SendButton") is Button && window.FindName("ActionButtons") is WrapPanel, "Window controls were not loaded.");
                 var permissionPanel = (Border)window.FindName("ToolPermissionPanel");
@@ -227,9 +216,9 @@ namespace ClaudeUI
                     }
                     Theme.Apply(window.Resources, store.Read().Dark);
                 }
-                ((Button)window.FindName("StatsBackButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                CheckStatisticsChatNavigation(controller, loaded);
                 themeButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-                Check(store.Read().Dark && (string)themeButton.Content == "浅色主题", "Theme switch failed.");
+                Check(store.Read().Dark && themeButton.Content is DrawingImage && (string)themeButton.Tag == "True" && (string)themeButton.ToolTip == "切换为浅色主题", "Theme switch failed.");
                 CheckSessionMenu(controller, loaded.Conversations[0]);
                 CheckHistorySurface(history);
                 Console.WriteLine("PASS session menu rendering without a system gutter in both themes");
@@ -242,6 +231,8 @@ namespace ClaudeUI
                 Check(PromptShortcuts.GetAction(Key.LeftShift, ModifierKeys.Shift, false) == PromptAction.None, "The old Shift shortcut still sends.");
                 Check(PromptShortcuts.GetAction(Key.Enter, ModifierKeys.Control | ModifierKeys.Shift, false) == PromptAction.None, "An unrelated chord triggered an action.");
                 Console.WriteLine("PASS model configuration, secret storage, per-session selection, and Enter shortcuts");
+                CheckComposerCommandRoutes(controller);
+                CheckComposerOptionMenus(controller, store, work);
                 CheckRequestDetailLayout();
                 CheckRequestOverviewLayout();
                 CheckStatisticsListSpace(controller);
@@ -301,10 +292,10 @@ namespace ClaudeUI
                 if (args.Contains("--live"))
                 {
                     Environment.SetEnvironmentVariable("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1");
-                    var options = new RequestOptions { Permission = "default", MaxTurns = 1 };
+                    var options = new RequestOptions { Permission = "default" };
                     var isolated = new[] {
                         "--safe-mode", "--strict-mcp-config", "--tools", "", "--setting-sources", "user",
-                        "--system-prompt", "Follow the user instruction."
+                        "--system-prompt", "Follow the user instruction.", "--max-turns", "1"
                     };
                     using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(40)))
                     {
@@ -380,85 +371,6 @@ namespace ClaudeUI
                 Check(stopped, "Cancelled version check continued.");
             }
             Console.WriteLine("PASS CLI updates: version comparison, registry validation, exact npm prefix, legacy npm/native routing, subprocess verification and cancellation");
-        }
-
-        private static void CheckPromptCache(string work)
-        {
-            var json = new System.Web.Script.Serialization.JavaScriptSerializer();
-
-            var original = new Dictionary<string, string> {
-                { "ANTHROPIC_BASE_URL", "https://example.test" }, { "ANTHROPIC_API_KEY", "fixture-secret" },
-                { "DISABLE_PROMPT_CACHING", "1" }, { "DISABLE_PROMPT_CACHING_SONNET", "1" },
-                { "FORCE_PROMPT_CACHING_5M", "1" }
-            };
-            string before = json.Serialize(original);
-            Check(Object.ReferenceEquals(original, PromptCachePolicy.Apply(null, original)) &&
-                Object.ReferenceEquals(original, PromptCachePolicy.Apply("inherit", original)), "Legacy cache settings changed.");
-            Check(new ModelProfile().CliEnvironment() == null, "Legacy model settings stopped inheriting CLI configuration.");
-            foreach (string policy in new[] { "5m", "1h", "off" })
-            {
-                var configured = PromptCachePolicy.Apply(policy, original);
-                Check(configured["ANTHROPIC_BASE_URL"] == original["ANTHROPIC_BASE_URL"] &&
-                    configured["ANTHROPIC_API_KEY"] == original["ANTHROPIC_API_KEY"], "Cache policy changed routing or authentication.");
-                Check(configured["DISABLE_PROMPT_CACHING"] == (policy == "off" ? "1" : "0"), "Cache enable/disable failed.");
-                if (policy != "off") Check(configured["CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL"] == policy &&
-                    configured["DISABLE_PROMPT_CACHING_SONNET"] == "0", "Cache TTL or tier disable override failed.");
-                var profile = json.Deserialize<ModelProfile>(json.Serialize(new ModelProfile { PromptCaching = policy }));
-                Check(profile.PromptCaching == policy && profile.CliEnvironment()["DISABLE_PROMPT_CACHING"] == configured["DISABLE_PROMPT_CACHING"],
-                    "Cache profile did not persist or apply without a custom endpoint.");
-                var cli = CliInstallation.Find(System.Reflection.Assembly.GetExecutingAssembly().Location, work);
-                string payload = "逐字保留：中文、代码 {\"x\":1}、空白  \nEND";
-                var response = new StringBuilder();
-                string parent = Environment.GetEnvironmentVariable("DISABLE_PROMPT_CACHING");
-                using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10)))
-                {
-                    int exit = new CliRunner().RunAsync(cli, work, new[] { "__cache_fixture__" }, payload,
-                        (line, error) => { if (!error) response.Append(line); }, timeout.Token, configured).GetAwaiter().GetResult();
-                    var child = json.Deserialize<Dictionary<string, string>>(response.ToString());
-                    Check(exit == 0 && child["Input"] == payload && child["Disabled"] == configured["DISABLE_PROMPT_CACHING"] &&
-                        (policy == "off" || child["Ttl"] == policy && child["Force"] == (policy == "5m" ? "1" : "0")),
-                        "Child process lost cache controls or changed input text.");
-                }
-                Check(Environment.GetEnvironmentVariable("DISABLE_PROMPT_CACHING") == parent, "Cache policy leaked into the parent process.");
-            }
-            Check(json.Serialize(original) == before, "Cache policy mutated the caller's environment.");
-            bool invalid = false;
-            try { PromptCachePolicy.Apply("invalid", original); } catch (InvalidOperationException) { invalid = true; }
-            Check(invalid, "Invalid cache policy was silently accepted.");
-            var row = new RequestStat { Input = 100, CacheWrite = 100, CacheRead = 800 };
-            Check(PromptCachePolicy.Describe(row).Contains("80.0%") && row.TotalInput == 1000, "Cache ratio changed the input accounting.");
-            row.CacheRead = 0;
-            Check(PromptCachePolicy.Describe(row).Contains("0.0%"), "Cache miss was reported as a saving.");
-            row.CacheRead = null;
-            Check(PromptCachePolicy.Describe(row).Contains("未知"), "Absent cache usage became a zero or a saving.");
-            row.Input = row.CacheWrite = row.CacheRead = 0;
-            Check(PromptCachePolicy.Describe(row).Contains("不适用"), "Zero input produced a cache percentage.");
-            row.Input = row.CacheWrite = row.CacheRead = Int32.MaxValue;
-            Check(PromptCachePolicy.Describe(row).Contains("33.3%"), "Cache ratio overflowed.");
-            row.Incomplete = true;
-            Check(PromptCachePolicy.Describe(row).Contains("未知"), "Partial usage produced a cache percentage.");
-            Console.WriteLine("PASS prompt cache policy: legacy inheritance, TTLs, disable, routing, serialization, child environment isolation, exact stdin, unknown usage and ratios");
-        }
-
-        private static void CheckPromptCacheDialog(Window owner)
-        {
-            new System.Windows.Interop.WindowInteropHelper(owner).EnsureHandle();
-            var profile = new ModelProfile { Id = "cache-ui", Name = "缓存配置", ModelId = "fixture", PromptCaching = "1h" };
-            var dialog = new ModelProfilesDialog(owner, new List<ModelProfile> { profile }, profile.Id,
-                (item, token) => System.Threading.Tasks.Task.FromResult<string>(null));
-            var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
-            var field = (ComboBox)typeof(ModelProfilesDialog).GetField("promptCaching", flags).GetValue(dialog);
-            var read = typeof(ModelProfilesDialog).GetMethod("ReadProfile", flags);
-            Check(field.Items.Count == 4 && field.SelectedIndex == 2, "Cache dialog lost the persisted selection.");
-            foreach (int index in new[] { 0, 1, 2, 3 })
-            {
-                field.SelectedIndex = index;
-                var saved = (ModelProfile)read.Invoke(dialog, new object[] { true });
-                Check(saved.PromptCaching == PromptCachePolicy.Values[index], "Cache dialog saved the wrong policy.");
-            }
-            field.SelectedIndex = -1;
-            Check(read.Invoke(dialog, new object[] { true }) == null, "Cache dialog accepted an invalid selection.");
-            Console.WriteLine("PASS cache configuration UI: persisted selection, all four policies and invalid selection validation");
         }
 
         private static void CheckRequestStatistics(DataStore store, string work)
@@ -970,8 +882,8 @@ namespace ClaudeUI
             host.Arrange(new Rect(0, 0, 850, host.DesiredSize.Height)); host.UpdateLayout();
             string text = String.Join("\n", VisualChildren<TextBlock>(host).Select(label => label.Text));
             Check(!text.Contains("网关实际扣费") && text.Contains("本轮 CLI 估算合计") && text.Contains("USD 0.027556") &&
-                text.Contains("不是单次请求费用") && text.Contains("98.1%") && text.Contains("1.847 s") && text.Contains("15.087 s"),
-                "Grouped request details confused missing billing, run-level estimates, cache ratios or timing scope.");
+                text.Contains("不是单次请求费用") && !text.Contains("缓存命中占比") && text.Contains("1.847 s") && text.Contains("15.087 s"),
+                "Grouped request details confused missing billing, run-level estimates or timing scope.");
             var fields = VisualChildren<TextBox>(host).ToList();
             Check(fields.All(field => field.IsReadOnly && field.TextWrapping == TextWrapping.Wrap) &&
                 fields.Any(field => field.Text == row.RunId) && fields.Any(field => field.Text == row.SessionId) &&
@@ -983,10 +895,10 @@ namespace ClaudeUI
             row.Input = null; row.CacheRead = null; row.CacheWrite = null; row.DurationMs = null;
             layout.Show(row); host.UpdateLayout();
             text = String.Join("\n", VisualChildren<TextBlock>(host).Select(label => label.Text));
-            Check(text.Contains("缓存命中占比未知") && text.Contains("未记录响应耗时"), "Unknown usage or duration was replaced with a fabricated value.");
+            Check(text.Contains("未记录响应耗时") && !text.Contains("缓存命中占比"), "Unknown usage or duration was replaced with a fabricated value.");
             layout.Show(null);
             Check(host.Children.Count == 1, "Clearing selection left stale request details.");
-            Console.WriteLine("PASS request detail cards: missing and zero charges, run-level estimates, duration scope, cache ratios, selectable provenance and clearing selection");
+            Console.WriteLine("PASS request detail cards: missing and zero charges, run-level estimates, duration scope, token usage, selectable provenance and clearing selection");
         }
 
         private static string OverviewText(Window window)
@@ -1652,9 +1564,308 @@ namespace ClaudeUI
                     bitmap.Render(surface);
                     var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
                     using (var file = File.Create(preview + (dark ? "-dark.png" : "-light.png"))) encoder.Save(file);
+                    string composerPreview = Environment.GetEnvironmentVariable("CLAUDEUI_COMPOSER_PREVIEW_PATH");
+                    if (!String.IsNullOrWhiteSpace(composerPreview))
+                    {
+                        var composer = (Border)controller.View.FindName("ComposerSurface");
+                        var composerBitmap = new RenderTargetBitmap((int)Math.Ceiling(composer.ActualWidth), (int)Math.Ceiling(composer.ActualHeight), 96, 96, PixelFormats.Pbgra32);
+                        composerBitmap.Render(composer); var png = new PngBitmapEncoder(); png.Frames.Add(BitmapFrame.Create(composerBitmap));
+                        using (var file = File.Create(composerPreview + (dark ? "-dark.png" : "-light.png"))) png.Save(file);
+                    }
                 }
             }
             Console.WriteLine("PASS project groups, global chats, cross-root deduplication, selecting CLI history, hidden sessions, and new chat isolation");
+        }
+
+        private static void CheckStatisticsChatNavigation(MainWindow controller, AppData data)
+        {
+            var window = controller.View;
+            var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            data = (AppData)typeof(MainWindow).GetField("data", flags).GetValue(controller);
+            var currentField = typeof(MainWindow).GetField("current", flags);
+            var original = (Conversation)currentField.GetValue(controller);
+            var activate = typeof(MainWindow).GetMethod("Activate", flags);
+            var first = new Conversation { Title = "navigation first", Workspace = original.Workspace };
+            var second = new Conversation { Title = "navigation second", Workspace = original.Workspace };
+            data.Conversations.Add(first); data.Conversations.Add(second);
+            activate.Invoke(controller, new object[] { first });
+            var history = (ListBox)window.FindName("HistoryList");
+            var stats = (Grid)window.FindName("StatsPage");
+            var chat = (Grid)window.FindName("ChatPage");
+            var statsButton = (Button)window.FindName("StatsButton");
+            Check(window.FindName("StatsBackButton") == null, "The removed statistics back button is still present.");
+            statsButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            var surface = (FrameworkElement)window.Content;
+            surface.Measure(new Size(1280, 810)); surface.Arrange(new Rect(0, 0, 1280, 810)); surface.UpdateLayout();
+            var row = (ListBoxItem)history.ItemContainerGenerator.ContainerFromItem(first);
+            Check(row != null && row.IsSelected, "The current conversation row was not generated.");
+            var menu = VisualChildren<Button>(row).First(item => item.Name == "SessionMenuButton");
+            menu.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left) { RoutedEvent = Mouse.PreviewMouseDownEvent });
+            Check(stats.Visibility == Visibility.Visible, "Clicking a conversation menu unexpectedly navigated away.");
+            row.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left) { RoutedEvent = Mouse.PreviewMouseDownEvent });
+            Check(chat.Visibility == Visibility.Visible && stats.Visibility == Visibility.Collapsed && currentField.GetValue(controller) == first && statsButton.Tag == null,
+                "Clicking the selected global conversation did not return to its chat.");
+            statsButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            var project = (StackPanel)window.FindName("ProjectList");
+            surface.UpdateLayout();
+            var projectList = VisualChildren<ListBox>(project).First(list => list.Items.Contains(first));
+            var projectRow = (ListBoxItem)projectList.ItemContainerGenerator.ContainerFromItem(first);
+            Check(projectRow != null, "The current project conversation row was not generated.");
+            projectRow.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left) { RoutedEvent = Mouse.PreviewMouseDownEvent });
+            Check(chat.Visibility == Visibility.Visible && stats.Visibility == Visibility.Collapsed && currentField.GetValue(controller) == first,
+                "Clicking the selected project conversation did not return to its chat.");
+            statsButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            history.SelectedItem = second;
+            Check(chat.Visibility == Visibility.Visible && stats.Visibility == Visibility.Collapsed && currentField.GetValue(controller) == second,
+                "Selecting a different conversation from statistics did not open that conversation.");
+            data.Conversations.Remove(first); data.Conversations.Remove(second);
+            activate.Invoke(controller, new object[] { original });
+            Console.WriteLine("PASS statistics navigation: current global/project chats, other conversation, menu isolation and removed back button");
+        }
+
+        private static void CheckComposerOptionMenus(MainWindow controller, DataStore store, string work)
+        {
+            var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+            var data = (AppData)typeof(MainWindow).GetField("data", flags).GetValue(controller);
+            var window = controller.View;
+            var permission = (ComboBox)window.FindName("PermissionBox"); var oldPermission = permission.SelectedItem;
+            var effort = (ComboBox)window.FindName("EffortBox"); var oldEffort = effort.SelectedItem;
+            var menus = (ComposerOptionMenus)typeof(MainWindow).GetField("optionMenus", flags).GetValue(controller);
+            Check(window.FindName("TurnsBox") == null && window.FindName("ConfigPanel") == null && window.FindName("EffortButton") is Button,
+                "Legacy max-turn controls remain or effort has no functional button.");
+            Check(permission.Items.Count == 6, "The permission menu does not expose all six CLI modes.");
+            foreach (var mode in ComposerOptionMenus.Permissions)
+            {
+                ((Button)window.FindName("ConfigButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                var item = menus.PermissionMenu.Items.OfType<MenuItem>().Single(row => (string)row.Tag == mode.Value);
+                var header = (Grid)item.Header;
+                Check(((StackPanel)header.Children[1]).Children.OfType<TextBlock>().Any(label => label.Text == mode.Description), "Permission mode has no real description.");
+                item.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+                Check(data.Permission == mode.Value && store.Read().Permission == mode.Value && ((TextBlock)window.FindName("PermissionSummary")).Text == mode.Title,
+                    "Permission selection did not persist or update the composer label: " + mode.Value);
+                var request = (RequestOptions)typeof(MainWindow).GetMethod("ChatOptions", flags).Invoke(controller, new object[] { false });
+                var arguments = request.Arguments(); int index = Array.IndexOf(arguments, "--permission-mode");
+                Check(index >= 0 && arguments[index + 1] == mode.Value && !arguments.Contains("--max-turns"), "The selected mode did not reach the real chat request or max-turn override remains.");
+                menus.ShowPermissions((Button)window.FindName("ConfigButton"));
+                var checks = menus.PermissionMenu.Items.OfType<MenuItem>().Select(row => new { Mode = (string)row.Tag, Check = (System.Windows.Shapes.Path)((Grid)row.Header).Children[2] }).ToList();
+                Check(checks.Count(row => row.Check.Visibility == Visibility.Visible) == 1 && checks.Single(row => row.Check.Visibility == Visibility.Visible).Mode == mode.Value,
+                    "The mode menu checkmark does not match the selected mode.");
+            }
+            foreach (var level in ComposerOptionMenus.Efforts)
+            {
+                ((Button)window.FindName("EffortButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                menus.EffortMenu.Items.OfType<MenuItem>().Single(row => (string)row.Tag == level.Value).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+                Check(data.Effort == level.Value && store.Read().Effort == level.Value && ((TextBlock)window.FindName("ConfigSummary")).Text == level.Title,
+                    "Effort selection did not persist or update its button.");
+                var request = (RequestOptions)typeof(MainWindow).GetMethod("ChatOptions", flags).Invoke(controller, new object[] { false });
+                var arguments = request.Arguments(); int index = Array.IndexOf(arguments, "--effort");
+                Check(level.Value.Length == 0 ? index < 0 : index >= 0 && arguments[index + 1] == level.Value, "Effort selection does not match CLI arguments.");
+            }
+            string migration = Path.Combine(work, "old-max-turns"); Directory.CreateDirectory(migration);
+            File.WriteAllText(Path.Combine(migration, "state.json"), "{\"MaxTurns\":\"1\",\"Conversations\":[]}");
+            var legacy = new DataStore(migration); legacy.Save(legacy.Read());
+            Check(!File.ReadAllText(Path.Combine(migration, "state.json")).Contains("MaxTurns"), "Legacy max-turn configuration is still persisted.");
+            permission.SelectedItem = oldPermission; effort.SelectedItem = oldEffort; menus.Close();
+            foreach (bool dark in new[] { false, true })
+            {
+                Theme.Apply(window.Resources, dark);
+                menus.ShowPermissions((Button)window.FindName("ConfigButton"));
+                var menu = menus.PermissionMenu; menu.Measure(new Size(490, 700)); menu.Arrange(new Rect(0, 0, menu.DesiredSize.Width, menu.DesiredSize.Height)); menu.UpdateLayout();
+                Check(menu.ActualHeight > 250 && menu.ActualWidth <= 490, "The permission descriptions overflow or the menu failed to render.");
+                string preview = Environment.GetEnvironmentVariable("CLAUDEUI_OPTION_MENU_PREVIEW");
+                if (!String.IsNullOrWhiteSpace(preview))
+                {
+                    var bitmap = new RenderTargetBitmap((int)Math.Ceiling(menu.ActualWidth), (int)Math.Ceiling(menu.ActualHeight), 96, 96, PixelFormats.Pbgra32); bitmap.Render(menu);
+                    var png = new PngBitmapEncoder(); png.Frames.Add(BitmapFrame.Create(bitmap));
+                    using (var file = File.Create(preview + (dark ? "-permissions-dark.png" : "-permissions-light.png"))) png.Save(file);
+                    menus.ShowEfforts((Button)window.FindName("EffortButton"));
+                    var levels = menus.EffortMenu; levels.Measure(new Size(490, 700)); levels.Arrange(new Rect(0, 0, levels.DesiredSize.Width, levels.DesiredSize.Height)); levels.UpdateLayout();
+                    bitmap = new RenderTargetBitmap((int)Math.Ceiling(levels.ActualWidth), (int)Math.Ceiling(levels.ActualHeight), 96, 96, PixelFormats.Pbgra32); bitmap.Render(levels);
+                    png = new PngBitmapEncoder(); png.Frames.Add(BitmapFrame.Create(bitmap));
+                    using (var file = File.Create(preview + (dark ? "-effort-dark.png" : "-effort-light.png"))) png.Save(file);
+                }
+            }
+            menus.Close(); Theme.Apply(window.Resources, data.Dark);
+            Console.WriteLine("PASS composer menus: six permission modes, selected checks, immediate persistence, six effort choices, actual CLI arguments, legacy max-turn migration and native rendering");
+        }
+
+        private static void CheckComposerCommandRoutes(MainWindow controller)
+        {
+            var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+            var route = typeof(MainWindow).GetMethod("HandleComposerCommand", flags);
+            var data = (AppData)typeof(MainWindow).GetField("data", flags).GetValue(controller);
+            var original = (Conversation)typeof(MainWindow).GetField("current", flags).GetValue(controller);
+            var window = controller.View;
+            var effort = (ComboBox)window.FindName("EffortBox"); var oldEffort = effort.SelectedItem;
+            var prompt = (TextBox)window.FindName("PromptBox"); string draft = prompt.Text;
+            var menus = (ComposerOptionMenus)typeof(MainWindow).GetField("optionMenus", flags).GetValue(controller);
+            int history = data.Conversations.Count;
+            Check(((System.Threading.Tasks.Task<bool>)route.Invoke(controller, new object[] { "/permissions" })).GetAwaiter().GetResult() && menus.PermissionMenu != null,
+                "The permissions command did not open the real parameter controls.");
+            Check(((System.Threading.Tasks.Task<bool>)route.Invoke(controller, new object[] { "/effort high" })).GetAwaiter().GetResult() && effort.SelectedItem.ToString() == "高" && data.Effort == "high",
+                "The effort command did not update the persisted CLI option.");
+            Check(!((System.Threading.Tasks.Task<bool>)route.Invoke(controller, new object[] { "/compact" })).GetAwaiter().GetResult() &&
+                !((System.Threading.Tasks.Task<bool>)route.Invoke(controller, new object[] { "/custom-skill arguments" })).GetAwaiter().GetResult(),
+                "CLI-owned commands were intercepted instead of being passed through.");
+            prompt.Text = "/new";
+            Check(((System.Threading.Tasks.Task<bool>)route.Invoke(controller, new object[] { "/new" })).GetAwaiter().GetResult() &&
+                typeof(MainWindow).GetField("current", flags).GetValue(controller) != original && data.Conversations.Count == history && original.Draft != "/new",
+                "The new-chat command removed history or left the command in the old draft.");
+            effort.SelectedItem = oldEffort;
+            typeof(MainWindow).GetMethod("CaptureOptions", flags).Invoke(controller, null);
+            typeof(MainWindow).GetMethod("Activate", flags).Invoke(controller, new object[] { original });
+            prompt.Text = draft; original.Draft = draft; menus.Close();
+            typeof(MainWindow).GetMethod("Save", flags).Invoke(controller, null);
+            Console.WriteLine("PASS composer command routing: real permissions, persisted effort, CLI passthrough, new conversation and retained history");
+        }
+
+        private static void CheckPromptCompletions(string work)
+        {
+            string folder = Path.Combine(work, "completion-project"), config = Path.Combine(work, "completion-config");
+            Directory.CreateDirectory(Path.Combine(folder, ".git")); Directory.CreateDirectory(config);
+            Directory.CreateDirectory(Path.Combine(folder, "src")); Directory.CreateDirectory(Path.Combine(folder, "node_modules"));
+            File.WriteAllText(Path.Combine(folder, "src", "My File.cs"), "fixture");
+            File.WriteAllText(Path.Combine(folder, "src", "入口.cs"), "fixture");
+            File.WriteAllText(Path.Combine(folder, "node_modules", "ignored.cs"), "fixture");
+            string skill = Path.Combine(folder, ".claude", "skills", "test-helper"), hidden = Path.Combine(folder, ".claude", "skills", "test-hidden");
+            Directory.CreateDirectory(skill); Directory.CreateDirectory(hidden);
+            File.WriteAllText(Path.Combine(skill, "SKILL.md"), "---\nname: test-helper\ndescription: fixture skill\n---\nFixture");
+            File.WriteAllText(Path.Combine(hidden, "SKILL.md"), "---\nname: test-hidden\nuser-invocable: false\n---\nFixture");
+            string custom = Path.Combine(folder, ".claude", "commands", "notes"); Directory.CreateDirectory(custom); File.WriteAllText(Path.Combine(custom, "explain.md"), "Fixture");
+            var commands = PromptCompletionCatalog.Commands(folder, config, CancellationToken.None);
+            Check(commands.Any(item => item.Title == "/compact") && commands.Any(item => item.Title == "/test-helper") && commands.Any(item => item.Title == "/notes:explain") && !commands.Any(item => item.Title == "/test-hidden"),
+                "Command completion lost built-ins, installed skills, nested custom commands or user-invocable restrictions.");
+            var files = PromptCompletionCatalog.Files(folder, "My File", CancellationToken.None);
+            Check(files.Count == 1 && files[0].Insert == "@\"src/My File.cs\" " && files[0].Description == "src/My File.cs", "Spaced filenames were not quoted as relative file references.");
+            Check(!PromptCompletionCatalog.Files(folder, "ignored", CancellationToken.None).Any() && PromptCompletionCatalog.Files(folder, "入口", CancellationToken.None).Count == 1,
+                "File completion included dependency trees or lost Unicode paths.");
+            Check(PromptCompletionCatalog.Token("email@example.com", 17) == null && PromptCompletionCatalog.Token("https://example.test", 20) == null && PromptCompletionCatalog.Token("/model sonnet", 13) == null,
+                "Completion activated for an email, URL or command argument.");
+            var token = PromptCompletionCatalog.Token("请检查 @src/My", 11);
+            Check(token != null && token.File && token.Query == "src/My" && token.Start == 4, "File completion token boundaries were incorrect.");
+            Window window;
+            using (var stream = typeof(MainWindow).Assembly.GetManifestResourceStream("ClaudeUI.MainWindow.xaml")) window = (Window)System.Windows.Markup.XamlReader.Load(stream);
+            Theme.Apply(window.Resources, true);
+            var prompt = (TextBox)window.FindName("PromptBox");
+            using (var completion = new PromptCompletions(prompt, (Border)window.FindName("ComposerSurface"), () => folder, () => config, () => true, window.Resources))
+            {
+                var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+                var list = (ListBox)typeof(PromptCompletions).GetField("list", flags).GetValue(completion);
+                prompt.Text = "请检查 @src/My 之后说明"; prompt.CaretIndex = "请检查 @src/My".Length;
+                list.ItemsSource = files; list.SelectedIndex = 0; completion.Accept();
+                Check(prompt.Text == "请检查 @\"src/My File.cs\"  之后说明", "File completion replaced text outside the active mention.");
+                prompt.Text = "/com"; prompt.CaretIndex = prompt.Text.Length;
+                list.ItemsSource = commands; list.SelectedItem = commands.First(item => item.Title == "/compact"); completion.Accept();
+                Check(prompt.Text == "/compact ", "Command completion did not insert the selected command.");
+                var popup = (System.Windows.Controls.Primitives.Popup)typeof(PromptCompletions).GetField("popup", flags).GetValue(completion);
+                Check(((Border)popup.Child).Background != null && !popup.IsOpen, "Completion popup lost its theme resources or stayed open after accepting.");
+            }
+            using (var cancellation = new CancellationTokenSource())
+            {
+                cancellation.Cancel(); bool stopped = false;
+                try { PromptCompletionCatalog.Files(folder, "", cancellation.Token); } catch (OperationCanceledException) { stopped = true; }
+                Check(stopped, "File completion ignored cancellation.");
+            }
+            Console.WriteLine("PASS composer completion: slash commands, skills, legacy commands, hidden skills, Unicode/spaced references, token boundaries, dependency filtering, insertion and cancellation");
+        }
+
+        private static void CheckNativeDeveloperVisuals()
+        {
+            foreach (string name in new[] { "terminal", "badge-info", "stethoscope", "shield-check", "blocks", "plug", "list-todo", "circle-help", "folder-open", "search", "eye", "arrow-right", "sparkles", "copy", "activity", "arrow-down-left", "arrow-up-right", "wallet" })
+            {
+                var icon = (Viewbox)DeveloperVisuals.Icon(name);
+                var canvas = (Canvas)icon.Child;
+                var path = (System.Windows.Shapes.Path)canvas.Children[0];
+                Rect bounds = path.Data.Bounds;
+                Check(!bounds.IsEmpty && bounds.Width > 0 && bounds.Height > 0 && bounds.Left >= -.01 && bounds.Top >= -.01 && bounds.Right <= 24.01 && bounds.Bottom <= 24.01,
+                    "Lucide SVG subpaths escaped the original viewbox: " + name + " " + bounds);
+            }
+            var panel = new ResponsiveCardPanel();
+            for (int i = 0; i < 3; i++) panel.Children.Add(new Border { Height = 120 + i * 20 });
+            foreach (int width in new[] { 984, 524 })
+            {
+                panel.Measure(new Size(width, Double.PositiveInfinity)); panel.Arrange(new Rect(0, 0, width, panel.DesiredSize.Height)); panel.UpdateLayout();
+                Rect first = System.Windows.Controls.Primitives.LayoutInformation.GetLayoutSlot((FrameworkElement)panel.Children[0]), second = System.Windows.Controls.Primitives.LayoutInformation.GetLayoutSlot((FrameworkElement)panel.Children[1]);
+                Check(width == 984 ? second.X > first.X && second.Y == first.Y : second.X == first.X && second.Y > first.Y,
+                    "Marketplace cards did not reflow between desktop and compact widths.");
+                foreach (FrameworkElement child in panel.Children)
+                    Check(child.TranslatePoint(new Point(child.ActualWidth, 0), panel).X <= width + .1, "A native market card overflowed horizontally.");
+            }
+            Window window;
+            using (var stream = typeof(MainWindow).Assembly.GetManifestResourceStream("ClaudeUI.MainWindow.xaml")) window = (Window)System.Windows.Markup.XamlReader.Load(stream);
+            Theme.Apply(window.Resources, true);
+            var date = (DatePicker)window.FindName("StatsFromFilter"); date.ApplyTemplate();
+            var popup = (System.Windows.Controls.Primitives.Popup)date.Template.FindName("PART_Popup", date);
+            var calendar = popup.Child as Calendar;
+            Check(calendar != null && date.Template.FindName("PART_Button", date) is Button, "The themed date picker lost its native calendar parts.");
+            var value = new DateTime(2026, 11, 22); date.SelectedDate = value;
+            Check(calendar.SelectedDate == value, "The themed date picker no longer synchronizes its calendar.");
+            calendar.SelectedDate = value.AddDays(-1);
+            Check(date.SelectedDate == value.AddDays(-1), "Calendar selection no longer updates the date filter.");
+            Console.WriteLine("PASS native design: Lucide geometry bounds, responsive card reflow, no horizontal overflow, themed calendar selection");
+        }
+
+        private static void CheckThemeTransitions()
+        {
+            Window window;
+            using (var stream = typeof(MainWindow).Assembly.GetManifestResourceStream("ClaudeUI.MainWindow.xaml"))
+                window = (Window)System.Windows.Markup.XamlReader.Load(stream);
+            window.ShowInTaskbar = false; window.ShowActivated = false;
+            window.WindowStartupLocation = WindowStartupLocation.Manual;
+            window.Left = -30000; window.Top = -30000;
+            window.Show();
+            Theme.Apply(window.Resources, false);
+            var button = (Button)window.FindName("ThemeButton");
+            ThemeToggleIcon.Update(button, false, false);
+            var knob = (Border)button.Template.FindName("Knob", button);
+            var sun = (Image)button.Template.FindName("SunIcon", button);
+            var moon = (Image)button.Template.FindName("MoonIcon", button);
+            var position = (TranslateTransform)knob.RenderTransform;
+            var brush = (SolidColorBrush)window.Resources["Canvas"];
+            Color light = brush.Color;
+            var target = new ResourceDictionary(); Theme.Apply(target, true);
+            Color dark = ((SolidColorBrush)target["Canvas"]).Color;
+            Check(position.X == 31 && sun.Opacity == 1 && moon.Opacity == 0, "Initial theme icon is incorrect.");
+            Theme.Animate(window.Resources, true); ThemeToggleIcon.Update(button, true, true);
+            if (SystemParameters.ClientAreaAnimation)
+            {
+                PumpThemeAnimation(150);
+                Check(brush.Color != light && brush.Color != dark, "Theme colors jumped instead of interpolating: " + brush.Color + ", animated=" + brush.HasAnimatedProperties + ", frozen=" + brush.IsFrozen);
+                Check(position.X > 0 && position.X < 31 && sun.Opacity > 0 && sun.Opacity < 1 && moon.Opacity > 0 && moon.Opacity < 1,
+                    "Theme icon did not slide and crossfade.");
+                Color intermediate = brush.Color; double offset = position.X;
+                Theme.Animate(window.Resources, false); ThemeToggleIcon.Update(button, false, true);
+                PumpThemeAnimation(25);
+                Check(Math.Abs(brush.Color.R - intermediate.R) < 20 && Math.Abs(position.X - offset) < 4 && brush.Color != light,
+                    "Reversing the theme animation jumped.");
+                PumpThemeAnimation(500);
+                Check(brush.Color == light && position.X == 31 && sun.Opacity == 1 && moon.Opacity == 0,
+                    "Interrupted theme animation did not finish in light mode.");
+                for (int i = 0; i < 12; i++)
+                {
+                    bool next = i % 2 == 0;
+                    Theme.Animate(window.Resources, next); ThemeToggleIcon.Update(button, next, true);
+                }
+                PumpThemeAnimation(500);
+                Check(brush.Color == light && position.X == 31, "Rapid theme toggles did not retain the latest target.");
+                Theme.Animate(window.Resources, true); ThemeToggleIcon.Update(button, true, true);
+                PumpThemeAnimation(500);
+            }
+            Check(Object.ReferenceEquals(brush, window.Resources["Canvas"]) && brush.Color == dark && position.X == 0 && moon.Opacity == 1 && sun.Opacity == 0,
+                "Theme animation did not settle or preserve shared brush references.");
+            Theme.Apply(window.Resources, false);
+            Check(brush.Color == light && !brush.HasAnimatedProperties, "Immediate theme apply did not clear animation clocks.");
+            window.Close();
+            Console.WriteLine("PASS theme transitions: intermediate colors, icon slide/crossfade, reversal continuity, rapid toggles, final colors and shared brushes");
+        }
+
+        private static void PumpThemeAnimation(int milliseconds)
+        {
+            var frame = new System.Windows.Threading.DispatcherFrame();
+            var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(milliseconds) };
+            timer.Tick += delegate { timer.Stop(); frame.Continue = false; };
+            timer.Start();
+            System.Windows.Threading.Dispatcher.PushFrame(frame);
         }
 
         private static void CheckPortableData(string work)
