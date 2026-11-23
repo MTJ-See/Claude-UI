@@ -166,6 +166,7 @@ namespace ClaudeUI
                 var command = new List<string>();
                 if (installation.Script != null) command.Add(installation.Script);
                 command.AddRange(arguments);
+                using (var bridge = ModelProtocolBridge.Start(environment, cancellation))
                 using (var process = new Process())
                 using (var job = new ChildProcessJob())
                 {
@@ -181,6 +182,7 @@ namespace ClaudeUI
                         StandardOutputEncoding = Encoding.UTF8,
                         StandardErrorEncoding = Encoding.UTF8
                     };
+                    if (bridge != null) environment = bridge.Environment;
                     if (environment != null)
                     {
                         foreach (var entry in environment)

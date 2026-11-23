@@ -6,6 +6,8 @@ using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Web.Script.Serialization;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace ClaudeUI
 {
@@ -13,7 +15,8 @@ namespace ClaudeUI
     {
         public string Name, Scope, Location, Description, Restriction;
         public MarketplaceKind Kind;
-        public bool Enabled, CanToggle = true;
+        public bool Enabled, CanToggle = true, CanRemove = true;
+        public string DeleteRestriction;
     }
     internal sealed class InstalledExtensionSnapshot
     {
@@ -76,10 +79,11 @@ namespace ClaudeUI
                     { item.CanToggle=false; item.Enabled=false; item.Restriction="Skill 工具受权限规则限制，请先在 Claude /permissions 中调整。"; }
 
                 }
+                if(item.Scope == "组织管理" || item.Scope.StartsWith("插件",StringComparison.Ordinal)) { item.CanRemove=false; item.DeleteRestriction=item.Scope=="组织管理"?"组织管理的扩展需由管理员移除。":"此条目由插件提供，请在 Claude /plugin 中卸载所属插件。"; }
                 if(!Directory.Exists(workspace)) { item.CanToggle=false; item.Restriction="当前工作目录不存在，请先选择有效项目。"; }
             }
             if(result.Warnings.Count>0)
-                foreach(var item in result.Items) { item.CanToggle=false; item.Restriction="扫描不完整，请先处理读取错误并刷新，避免覆盖未知设置。"; }
+                foreach(var item in result.Items) { item.CanToggle=false; item.CanRemove=false; item.DeleteRestriction="扫描不完整，请刷新并处理读取错误后再删除。"; item.Restriction="扫描不完整，请先处理读取错误并刷新，避免覆盖未知设置。"; }
             return result;
         }
         private static bool Denied(Dictionary<string,object> settings,string name)
@@ -192,6 +196,89 @@ namespace ClaudeUI
                 });
             else
                 Update(localSettings,root=>Ensure(root,"skillOverrides")[item.Name]=enabled?"on":"off");
+        }
+        private InstalledExtension Current(InstalledExtension item)
+        {
+            var current=Scan().Items.FirstOrDefault(e=>e.Name==item.Name && e.Kind==item.Kind && e.Scope==item.Scope && SamePath(e.Location,item.Location));
+            if(current==null) throw new InvalidOperationException("该条目已改变或移除，请刷新列表。");
+            return current;
+        }
+        internal MarketplaceItem Details(InstalledExtension item)
+        {
+            item=Current(item);
+            var detail=new MarketplaceItem { Name=item.Name,Description=item.Description,Kind=item.Kind,Provider="local",Id=item.Name,Author=item.Scope,
+                Tags=new[]{item.Scope,item.Enabled?"已开启":"已关闭"},Popularity="本地已安装",Permissions=item.Restriction??"使用时仍受 Claude 的权限与审批规则控制。",Installation="安装位置："+item.Location };
+            if(item.Kind==MarketplaceKind.Skill)
+            {
+                if(new FileInfo(item.Location).Length>2*1024*1024) throw new InvalidOperationException("SKILL.md 超过 2 MB，请在本地编辑器查看。");
+                detail.Readme=File.ReadAllText(item.Location);
+                string metadata=Path.Combine(Path.GetDirectoryName(item.Location),".claudeui-install.json");
+                if(File.Exists(metadata))
+                    try { var provenance=Parse(File.ReadAllText(metadata)); detail.SourceUrl=Text(provenance,"source"); detail.Installation+="\n来源 ID："+Text(provenance,"id"); } catch(InvalidOperationException) { }
+            }
+            else
+            {
+                var root=Parse(File.ReadAllText(item.Location));
+                Dictionary<string,object> config;
+                if(item.Scope=="项目私有")
+                {
+                    var project=Dict(root,"projects").Where(p=>SamePath(p.Key,workspace)).Select(p=>p.Value as Dictionary<string,object>).FirstOrDefault()??Empty();
+                    config=Dict(Dict(project,"mcpServers"),item.Name);
+                }
+                else
+                {
+                    var servers=Dict(root,"mcpServers"); if(servers.Count==0 && item.Scope.StartsWith("插件",StringComparison.Ordinal)) servers=root;
+                    string key=item.Scope.StartsWith("插件",StringComparison.Ordinal)?item.Name.Split(':').Last():item.Name;
+                    config=Dict(servers,key);
+                }
+                string command=Text(config,"command"),type=Text(config,"type");
+                detail.Readme="## 本地配置\n\n- 来源："+item.Scope+"\n- 状态："+(item.Enabled?"开启":"关闭")+"\n- 传输方式："+(type.Length>0?type:(command.Length>0?"stdio":"未声明"));
+                if(command.Length>0) detail.Readme+="\n- 启动程序：`"+command.Replace("`","")+"`";
+                Uri endpoint;
+                if(Uri.TryCreate(Text(config,"url"),UriKind.Absolute,out endpoint)) detail.Readme+="\n- 远程主机：`"+endpoint.Host+"`（地址中的认证信息已隐藏）";
+                if(config.ContainsKey("args")) detail.Readme+="\n- 已配置启动参数（值已隐藏，避免显示密钥）";
+                foreach(var field in Dict(config,"env")) detail.Parameters.Add(new MarketplaceParameter {Name=field.Key,Description="已配置环境变量，值已隐藏"});
+                foreach(var field in Dict(config,"headers")) detail.Parameters.Add(new MarketplaceParameter {Name=field.Key,Description="已配置请求头，值已隐藏"});
+                detail.Installation+="\n配置值含潜在密钥，此页面仅展示结构与字段名称。";
+            }
+            return detail;
+        }
+        internal async Task Remove(InstalledExtension item,CliInstallation cli,CancellationToken token)
+        {
+            item=Current(item);
+            if(!item.CanRemove) throw new InvalidOperationException(item.DeleteRestriction??"此来源不能单独删除。");
+            token.ThrowIfCancellationRequested();
+            if(item.Kind==MarketplaceKind.Skill)
+            {
+                string directory=Path.GetFullPath(Path.GetDirectoryName(item.Location));
+                string parent=Path.GetDirectoryName(directory);
+                var allowed=ProjectRoots().Select(p=>Path.Combine(p,".claude","skills")).Concat(new[]{Path.Combine(configRoot,"skills")});
+                if(!allowed.Any(p=>SamePath(p,parent)) || !SamePath(Path.Combine(directory,"SKILL.md"),item.Location)) throw new InvalidOperationException("删除路径不在已识别的 skills 目录中。");
+                MarketplaceInstaller.CheckTree(directory);
+                var directories=new Stack<string>(); directories.Push(directory);
+                while(directories.Count>0)
+                {
+                    token.ThrowIfCancellationRequested();
+                    foreach(string child in Directory.GetFileSystemEntries(directories.Pop()))
+                    {
+                        var attributes=File.GetAttributes(child);
+                        if((attributes&FileAttributes.ReparsePoint)!=0) throw new InvalidOperationException("Skill 包含文件或目录链接，已停止删除，请在本地检查。");
+                        if((attributes&FileAttributes.Directory)!=0) directories.Push(child);
+                    }
+                }
+                Directory.Delete(directory,true);
+            }
+            else
+            {
+                if(cli==null) throw new InvalidOperationException("未检测到 Claude CLI，请先检查 CLI 工具。");
+                string scope=item.Scope=="用户级"?"user":item.Scope=="项目共享"?"project":item.Scope=="项目私有"?"local":null;
+                if(scope==null) throw new InvalidOperationException("该 MCP 来源需在所属管理工具中移除。");
+                var environment=new Dictionary<string,string>{{"CLAUDE_CONFIG_DIR",configRoot}};
+                int code=await new CliRunner().RunAsync(cli,workspace,new[]{"mcp","remove",item.Name,"--scope",scope},null,(line,error)=>{},token,environment);
+                if(code!=0) throw new InvalidOperationException("Claude CLI 删除失败（退出码 "+code+"），原条目的实际状态请刷新确认。");
+                if(Scan().Items.Any(e=>e.Kind==item.Kind && e.Name==item.Name && e.Scope==item.Scope && SamePath(e.Location,item.Location)))
+                    throw new InvalidOperationException("CLI 尚未移除选定作用域的配置，请刷新并检查权限。");
+            }
         }
         private static void Update(string path,Action<Dictionary<string,object>> mutate)
         {

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -22,7 +22,7 @@ namespace ClaudeUI
         public static void Apply(RequestStat row, IEnumerable<RequestRate> overrides)
         {
             if (row.EstimatedCost.HasValue || row.PricingStatus != null) return;
-            if (row.ExecutionOnly || row.Incomplete) { row.PricingStatus = "请求不完整，未计费"; return; }
+            if (row.ExecutionOnly || row.Incomplete) { row.PricingStatus = "请求未完成，费用未知"; return; }
             if (row.Input < 0 || row.Output < 0 || row.CacheRead < 0 || row.CacheWrite < 0 || row.CacheWrite1Hour < 0)
             { row.PricingStatus = "Token 用量无效，未计费"; return; }
             var rules = (overrides ?? Enumerable.Empty<RequestRate>()).Where(rate => rate != null).ToList();

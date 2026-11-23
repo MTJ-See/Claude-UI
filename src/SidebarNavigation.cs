@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
@@ -118,7 +118,7 @@ namespace ClaudeUI
                 {
                     var list = new ListBox { ItemsSource = sessions, Background = Brushes.Transparent, BorderThickness = new Thickness(0),
                         Template = ((ListBox)window.FindName("HistoryList")).Template,
-                        ItemContainerStyle = (Style)window.Resources["NavItem"], ItemTemplate = ((ListBox)window.FindName("HistoryList")).ItemTemplate,
+                        ItemContainerStyle = ((ListBox)window.FindName("HistoryList")).ItemContainerStyle, ItemTemplate = ((ListBox)window.FindName("HistoryList")).ItemTemplate,
                         Margin = new Thickness(13, 0, 0, 5), MaxHeight = 190 };
                     ScrollViewer.SetHorizontalScrollBarVisibility(list, ScrollBarVisibility.Disabled);
                     list.SelectedItem = sessions.Contains(current) ? current : null;

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
@@ -19,7 +19,7 @@ namespace ClaudeUI
         internal List<string> CliReplyParts;
     }
 
-    public sealed class Conversation
+    public sealed class Conversation : System.ComponentModel.INotifyPropertyChanged
     {
         public string Title { get; set; }
         public string Id { get; set; }
@@ -33,6 +33,21 @@ namespace ClaudeUI
         [ScriptIgnore] public string Draft { get; set; }
         public List<ChatAttachment> DraftAttachments { get; set; }
         internal string FirstPrompt, FirstApiError, FirstApiErrorUtc;
+        private bool taskRunning, navigationLocked;
+        [ScriptIgnore] public bool IsTaskRunning { get { return taskRunning; } }
+        [ScriptIgnore] public bool CanNavigate { get { return !navigationLocked; } }
+        public event System.ComponentModel.PropertyChangedEventHandler PropertyChanged;
+        internal void SetExecutionState(bool active, bool locked)
+        {
+            bool changed = taskRunning != active || navigationLocked != locked;
+            taskRunning = active; navigationLocked = locked;
+            if (changed && PropertyChanged != null)
+            {
+                PropertyChanged(this, new System.ComponentModel.PropertyChangedEventArgs("IsTaskRunning"));
+                PropertyChanged(this, new System.ComponentModel.PropertyChangedEventArgs("CanNavigate"));
+            }
+        }
+
 
         public Conversation()
         {

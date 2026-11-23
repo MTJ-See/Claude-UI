@@ -31,6 +31,7 @@ namespace ClaudeUI
             this.item = item; this.context = context; this.credentials = credentials;
             dialog = new Window { Owner = owner, Title = "安装 · " + item.Name, Width = 680, Height = Math.Min(810, SystemParameters.WorkArea.Height - 35), MinHeight = 540, WindowStartupLocation = WindowStartupLocation.CenterOwner, Resources = owner.Resources };
             dialog.SetResourceReference(Window.BackgroundProperty, "Canvas"); dialog.SetResourceReference(Window.ForegroundProperty, "Ink");
+            DialogVisuals.Apply(dialog);
             consent.SetResourceReference(Control.ForegroundProperty, "Ink");
             logs.SetResourceReference(Control.ForegroundProperty, "Ink");
             accessToken.SetResourceReference(Control.ForegroundProperty, "Ink");
@@ -79,7 +80,11 @@ namespace ClaudeUI
                 "MCP 可访问本机或第三方服务。API Key 会写入 Claude 原生配置，请勿提交含密钥的项目配置。托管方式会向魔搭提交配置并创建服务，可能产生平台资源用量；本地注册失败时请到魔搭控制台检查已部署服务。" :
                 "Skill 可能包含脚本和工具指令。此步骤仅下载文件，不执行包内脚本；后续使用时由 Claude 的权限规则控制。已有同名目录将阻止安装。", 12, "MutedInk")));
             panel.Children.Add(consent);
-            var buttons = new WrapPanel(); buttons.Children.Add(start); buttons.Children.Add(stop); panel.Children.Add(buttons);
+            var buttons = new WrapPanel(); buttons.Children.Add(start); buttons.Children.Add(stop);
+            var copyLog = new Button { Content = "复制日志", Margin = new Thickness(10,0,0,0), Padding = new Thickness(12,8,12,8) };
+            copyLog.SetResourceReference(FrameworkElement.StyleProperty,"Ghost");
+            copyLog.Click += delegate { try { if(logs.Text.Length>0) Clipboard.SetText(logs.Text); } catch(System.Runtime.InteropServices.ExternalException) { Log("剪贴板被占用，请稍后重试。"); } };
+            buttons.Children.Add(copyLog); panel.Children.Add(buttons);
             panel.Children.Add(logs);
             start.SetResourceReference(FrameworkElement.StyleProperty, "Primary"); stop.SetResourceReference(FrameworkElement.StyleProperty, "Ghost");
             start.Click += async delegate { if (!running) await Install(); };
@@ -112,6 +117,8 @@ namespace ClaudeUI
             foreach (var input in inputs.Values) input.IsEnabled = false;
             try
             {
+                Log("安装条目：" + item.Name + "（" + item.Id + "）");
+                Log("范围：" + (scope.SelectedIndex == 1 ? "当前项目" : "用户级"));
                 string token = accessToken.Password;
                 if (item.Kind == MarketplaceKind.Skill)
                     await MarketplaceInstaller.DownloadSkill(item, MarketplaceInstaller.SkillsRoot(context, scope.SelectedIndex == 1), name.Text.Trim(), token, Log, cancellation.Token);
@@ -138,7 +145,11 @@ namespace ClaudeUI
                 succeeded = true; start.Content = "安装成功"; Log("成功。重新启动 Claude 会话后使用新安装的扩展。");
             }
             catch (OperationCanceledException) { Log("安装已停止。若操作已提交，请检查 CLI 配置或魔搭控制台中的实际状态。"); }
-            catch (Exception ex) { Log("安装失败：" + (ex is InvalidOperationException ? ex.Message : "操作未完成，请检查网络、磁盘权限与运行依赖后重试。")); }
+            catch (System.IO.InvalidDataException) { Log("安装失败：下载的发布包不是有效 ZIP 或文件已损坏，请重试；若仍失败，请复制日志反馈该条目。"); }
+            catch (UnauthorizedAccessException) { Log("安装失败：无权写入目标目录或配置文件，请选择可写目录或检查权限。"); }
+            catch (System.IO.IOException ex) { Log("安装失败：文件读写失败（错误码 " + ex.HResult.ToString("X8") + "），请检查磁盘空间、同名文件及目录是否被占用。"); }
+            catch (System.ComponentModel.Win32Exception) { Log("安装失败：无法启动 CLI 程序，请在 CLI 工具中重新检查安装路径。"); }
+            catch (Exception ex) { Log("安装失败：" + (ex is InvalidOperationException ? ex.Message : "操作未完成（" + ex.GetType().Name + "），请复制日志以便定位。")); }
             finally
             {
                 running = false; cancellation.Dispose(); cancellation = null;

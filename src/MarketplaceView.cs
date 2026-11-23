@@ -27,7 +27,9 @@ namespace ClaudeUI
         private readonly TextBlock title = new TextBlock { FontSize = 26, FontWeight = FontWeights.SemiBold };
         private readonly TextBlock status = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 14, 0, 14) };
         private readonly TextBox search = new TextBox { Width = 240, Margin = new Thickness(0, 0, 8, 0), ToolTip = "按名称或简介搜索，按 Enter 查询" };
-        private readonly Button previous, next, retry;
+        private readonly Button previous, next, retry, installedButton;
+        private readonly ScrollViewer scroll;
+        private double marketOffset;
         private readonly WrapPanel toolbar;
         private CancellationTokenSource loading;
         private MarketplaceKind kind;
@@ -62,6 +64,21 @@ namespace ClaudeUI
             toolbar = new WrapPanel { Margin = new Thickness(0, 15, 0, 0) };
             var searchGroup = new Grid { Width = 280, Margin = new Thickness(0, 0, 8, 0) };
             search.Width = Double.NaN; search.Height = 38; search.Margin = new Thickness(0); search.Padding = new Thickness(36, 8, 8, 8);
+            // TextBoxView 自己处理 Padding；外层边框不能重复应用，否则文字会被固定高度裁切。
+            search.Template = (ControlTemplate)System.Windows.Markup.XamlReader.Parse(@"
+<ControlTemplate xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml' TargetType='TextBox'>
+  <Border x:Name='SearchBorder' CornerRadius='8' Background='{TemplateBinding Background}' BorderBrush='{TemplateBinding BorderBrush}' BorderThickness='{TemplateBinding BorderThickness}'>
+    <ScrollViewer x:Name='PART_ContentHost' Focusable='False'/>
+  </Border>
+  <ControlTemplate.Triggers>
+    <Trigger Property='IsMouseOver' Value='True'><Setter TargetName='SearchBorder' Property='BorderBrush' Value='{DynamicResource CardHoverLine}'/></Trigger>
+    <Trigger Property='IsKeyboardFocused' Value='True'><Setter TargetName='SearchBorder' Property='BorderBrush' Value='{DynamicResource Accent}'/></Trigger>
+    <Trigger Property='IsEnabled' Value='False'><Setter TargetName='SearchBorder' Property='Opacity' Value='.4'/></Trigger>
+  </ControlTemplate.Triggers>
+</ControlTemplate>");
+            search.VerticalContentAlignment = VerticalAlignment.Center;
+            search.SetResourceReference(Control.ForegroundProperty, "Ink");
+            search.SetResourceReference(TextBox.CaretBrushProperty, "Ink");
             search.SetResourceReference(Control.BackgroundProperty, "InputSurface");
             searchGroup.SetBinding(UIElement.VisibilityProperty, new Binding("Visibility") { Source = search });
             searchGroup.Children.Add(search);
@@ -76,12 +93,12 @@ namespace ClaudeUI
             toolbar.Children.Add(searchButton);
             toolbar.Children.Add(Action("刷新", async () => { if (showingInstalled) await LoadInstalled(); else if (selected == null) await LoadList(true); else await LoadDetail(selected, true); }));
 
-            toolbar.Children.Add(Action("已安装", LoadInstalled));
-            browseMarket = Action("浏览市场", async () => { await LoadList(true); });
+            installedButton = Action("已安装", LoadInstalled); toolbar.Children.Add(installedButton);
+            browseMarket = Action("浏览市场", ReturnToMarket);
             browseMarket.Visibility = Visibility.Collapsed; toolbar.Children.Add(browseMarket);
             Grid.SetRow(toolbar, 1); host.Children.Add(toolbar);
             Grid.SetRow(status, 2); host.Children.Add(status);
-            var scroll = new ScrollViewer { Content = content, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
+            scroll = new ScrollViewer { Content = content, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
             Grid.SetRow(scroll, 3); host.Children.Add(scroll);
             var footer = new WrapPanel { Margin = new Thickness(0, 12, 0, 0) };
             previous = Action("上一页", async () => { page--; await LoadList(false); });
@@ -116,6 +133,7 @@ namespace ClaudeUI
         private async Task LoadList(bool refresh)
         {
             selected = null;
+            marketOffset = 0; installedButton.Visibility = Visibility.Visible;
             showingInstalled = false; browseMarket.Visibility = Visibility.Collapsed; title.Text = kind == MarketplaceKind.Mcp ? "MCP 市场" : "Skill 市场";
             previous.Visibility = next.Visibility = search.Visibility = toolbar.Children[1].Visibility = Visibility.Visible;
             var token = Begin();
@@ -123,14 +141,37 @@ namespace ClaudeUI
             {
                 var result = await providers["modelscope"].ListAsync(kind, page, query, refresh, token);
                 if (token.IsCancellationRequested) return;
-                currentPage = result; RenderList();
+                currentPage = result; RenderList(); scroll.ScrollToTop();
             }
             catch (OperationCanceledException) { }
             catch (Exception ex) { if (!token.IsCancellationRequested) Failed(ex); }
         }
+        private void SaveMarketPosition()
+        {
+            if (selected == null && !showingInstalled && currentPage != null) marketOffset = scroll.VerticalOffset;
+        }
+        private async Task ReturnToMarket()
+        {
+            if (currentPage == null) { await LoadList(true); return; }
+            Cancel(); loading = new CancellationTokenSource();
+            var token = loading.Token;
+            selected = null; showingInstalled = false;
+            installedButton.Visibility = Visibility.Visible; browseMarket.Visibility = Visibility.Collapsed;
+            title.Text = kind == MarketplaceKind.Mcp ? "MCP 市场" : "Skill 市场";
+            // The current page and query stay in memory; returning never issues a list request.
+            RenderList();
+            await owner.Dispatcher.InvokeAsync(() =>
+            {
+                if (token.IsCancellationRequested || selected != null || showingInstalled) return;
+                scroll.UpdateLayout();
+                scroll.ScrollToVerticalOffset(marketOffset);
+            }, System.Windows.Threading.DispatcherPriority.Loaded);
+        }
         private async Task LoadInstalled()
         {
+            SaveMarketPosition();
             showingInstalled = true; selected = null;
+            installedButton.Visibility = Visibility.Collapsed; browseMarket.Content = "浏览市场";
             previous.Visibility = next.Visibility = search.Visibility = toolbar.Children[1].Visibility = Visibility.Collapsed;
             browseMarket.Visibility = Visibility.Visible;
             var token = Begin(); status.Text = "正在扫描本地 Claude 配置与 skills 目录…";
@@ -151,10 +192,33 @@ namespace ClaudeUI
                         await Task.Run(()=>manager.SetEnabled(item,enabled));
                         // All installations sharing a name follow Claude's same per-name override.
                         if(showingInstalled && host.IsVisible) await LoadInstalled();
+                    },async()=>
+                    {
+                        var detail=await Task.Run(()=>manager.Details(item));
+                        bool deleted=new InstalledExtensionDetailsDialog(owner,detail,item.CanRemove,item.DeleteRestriction,
+                            dialog=>DeleteInstalled(dialog,item,manager)).Show();
+                        if(deleted && showingInstalled && host.IsVisible) await LoadInstalled();
+                    },async()=>
+                    {
+                        if(await DeleteInstalled(owner,item,manager) && showingInstalled && host.IsVisible) await LoadInstalled();
                     }));
             }
             catch(OperationCanceledException) { }
             catch(Exception ex) { if(!token.IsCancellationRequested) Failed(ex); }
+        }
+        private async Task<bool> DeleteInstalled(Window dialogOwner,InstalledExtension item,InstalledExtensions manager)
+        {
+            if(!item.CanRemove) throw new InvalidOperationException(item.DeleteRestriction??"不能单独删除此来源。");
+            string effect=item.Kind==MarketplaceKind.Skill?"将删除该 Skill 目录及其中的文件。":"将移除此作用域的 MCP 配置；其他作用域的同名配置保持不变，云端服务不会被删除。";
+            if(DialogVisuals.Show(dialogOwner,"删除 "+item.Name+"？\n\n来源："+item.Scope+"\n位置："+item.Location+"\n\n"+effect,
+                "确认删除",MessageBoxButton.YesNo,MessageBoxImage.Warning,MessageBoxResult.No)!=MessageBoxResult.Yes) return false;
+            using(var timeout=new CancellationTokenSource(30000))
+            {
+                try {await Task.Run(()=>manager.Remove(item,installContext().Cli,timeout.Token));}
+                catch(OperationCanceledException) {throw new InvalidOperationException("删除超时，请刷新列表检查实际状态。");}
+            }
+            status.Text="已删除 · "+item.Name;
+            return true;
         }
         private void Failed(Exception ex)
         {
@@ -225,8 +289,10 @@ namespace ClaudeUI
 
         private async Task LoadDetail(MarketplaceItem item, bool refresh)
         {
+            SaveMarketPosition();
             selected = item;
-            showingInstalled = false; browseMarket.Visibility = Visibility.Collapsed; title.Text = kind == MarketplaceKind.Mcp ? "MCP 市场" : "Skill 市场";
+            installedButton.Visibility = Visibility.Collapsed; browseMarket.Content = "返回市场";
+            showingInstalled = false; browseMarket.Visibility = Visibility.Visible; title.Text = kind == MarketplaceKind.Mcp ? "MCP 市场" : "Skill 市场";
             previous.Visibility = next.Visibility = search.Visibility = toolbar.Children[1].Visibility = Visibility.Collapsed;
             var token = Begin();
             try
@@ -246,6 +312,7 @@ namespace ClaudeUI
                 if (SafeLink(detail.SourceUrl, out url))
                     source = Action("源码仓库 ↗", () => { Process.Start(new ProcessStartInfo(url.AbsoluteUri) { UseShellExecute = true }); return Task.FromResult(0); });
                 content.Children.Add(MarketplaceDetailView.Create(detail, install, source));
+                scroll.ScrollToTop();
             }
             catch (OperationCanceledException) { }
             catch (Exception ex) { if (!token.IsCancellationRequested) Failed(ex); }

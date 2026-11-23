@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -52,6 +52,7 @@ namespace ClaudeUI
             try
             {
                 var store = new DataStore(work);
+                CheckConversationDeletion(work);
                 CheckThemeTransitions();
                 CheckNativeDeveloperVisuals();
                 CheckPromptCompletions(work);
@@ -113,6 +114,7 @@ namespace ClaudeUI
                 Check(tokenDanceEnvironment["ANTHROPIC_BASE_URL"] == "https://tokendance.space/gateway" &&
                     tokenDanceEnvironment["ANTHROPIC_AUTH_TOKEN"] == "synthetic-credential", "The saved TokenDance address was not corrected.");
                 CheckRequestStatistics(store, work);
+                CheckCancelledCosts(work);
                 CheckUsageDashboard(work);
                 CheckBillingRules(work);
                 CheckProbeStatistics(work);
@@ -121,6 +123,7 @@ namespace ClaudeUI
                 var app = new Application();
                 CheckFailedSessionRecovery(work);
                 CheckStatisticsDeletion(work);
+                CheckStatisticsPagination(work);
                 var controller = new MainWindow(store);
                 var window = controller.View;
                 window.ApplyTemplate();
@@ -182,7 +185,7 @@ namespace ClaudeUI
                 var stats = (ListView)window.FindName("StatsRows");
                 stats.SelectedIndex = 0;
                 Check(stats.Items.Count == 1 && ((RequestStat)stats.Items[0]).BilledText == "未返回" &&
-                    ((TextBlock)window.FindName("StatsDetail")).Text.Contains("CLI 估算 USD 0.013000"), "CLI estimate appeared as actual billing.");
+                    !((TextBlock)window.FindName("StatsDetail")).Text.Contains("CLI 估算"), "CLI estimate appeared as actual billing.");
                 stats.Measure(new Size(850, 300));
                 stats.Arrange(new Rect(0, 0, 850, 300));
                 stats.UpdateLayout();
@@ -191,8 +194,8 @@ namespace ClaudeUI
                 Check(fullRequestId.IsReadOnly && fullRequestId.SelectedText == "请求 ID：" + ((RequestStat)stats.SelectedItem).RequestId,
                     "Statistics request ID was not fully selectable.");
                 var idColumn = ((GridView)stats.View).Columns.First(column => (string)column.Header == "请求 ID");
-                Check(Double.IsNaN(idColumn.Width) && idColumn.CellTemplate.LoadContent() is TextBox,
-                    "Request IDs were constrained to a fixed truncated column or were not selectable.");
+                Check(idColumn.Width == 180 && idColumn.CellTemplate.LoadContent() is TextBox,
+                    "Request ID column lost its compact width or selectable text.");
                 var requestFilter = (TextBox)window.FindName("StatsRequestFilter");
                 requestFilter.Text = "no-such-request";
                 Check(stats.Items.Count == 0, "Request ID filtering did not update the dashboard.");
@@ -233,11 +236,14 @@ namespace ClaudeUI
                 Console.WriteLine("PASS model configuration, secret storage, per-session selection, and Enter shortcuts");
                 CheckComposerCommandRoutes(controller);
                 CheckComposerOptionMenus(controller, store, work);
+                CheckComposerSendState(controller);
                 CheckRequestDetailLayout();
+                CheckDialogVisuals(window);
                 CheckRequestOverviewLayout();
                 CheckStatisticsListSpace(controller);
                 CheckCliOutputPresentation(controller, work);
                 CheckReplyProgress(controller, store);
+                CheckRunningNavigation(controller);
                 CheckMarkdownReply();
                 CheckMarkdownTables();
                 CheckSidebarNavigation(controller, store, catalogFixture, work);
@@ -404,7 +410,7 @@ namespace ClaudeUI
             var charges = billed.Statistics(DateTime.UtcNow, route, "session", "fixture", null, true, false);
             Check(charges.Count == 6 && charges[0].BilledText == "CNY 0.00425" && charges[0].BillingField == "billing.amount" &&
                 charges[1].BilledText == "USD 0" && charges[2].BilledText == "0.2" && charges[2].BilledCurrency == null &&
-                !charges[3].HasBilledAmount && charges[4].BilledText == "0" && charges[4].BilledCurrency == null &&
+                charges[3].BilledText == "CNY 0.33" && charges[3].Incomplete && charges[4].BilledText == "0" && charges[4].BilledCurrency == null &&
                 charges[5].ExecutionOnly,
                 "Actual billing was missing, misattributed, or incorrectly inferred.");
             store.Statistics.Append(charges);
@@ -412,6 +418,175 @@ namespace ClaudeUI
             File.Delete(Path.Combine(work, "request-statistics.jsonl"));
             store.Statistics.Append(rows);
             Console.WriteLine("PASS request statistics, cache totals, resumed cost delta, gateway redaction, and persistence");
+        }
+
+        private static void CheckCancelledCosts(string work)
+        {
+            var stream = new ClaudeStream(); var started = DateTime.UtcNow.AddSeconds(-10);
+            stream.Read("{\"type\":\"stream_event\",\"event\":{\"type\":\"message_start\",\"message\":{\"id\":\"completed-before-denial\",\"model\":\"cancel-model\",\"usage\":{\"input_tokens\":20}}}}", started);
+            stream.Read("{\"type\":\"stream_event\",\"event\":{\"type\":\"message_delta\",\"usage\":{\"output_tokens\":10},\"delta\":{\"stop_reason\":\"tool_use\"}}}", started.AddSeconds(1));
+            stream.Read("{\"type\":\"stream_event\",\"event\":{\"type\":\"message_stop\"}}", started.AddSeconds(2));
+            var rows = stream.Statistics(started, null, "cancel-session", "cancel-model", null, true, false, "拒绝工具授权");
+            var rate = new RequestRate { Model = "cancel-model", Currency = "CNY", Unit = 1000, Input = 2, Output = 3 };
+            foreach (var row in rows) RequestPricing.Apply(row, new[] { rate });
+            var completed = rows.Single(row => !row.ExecutionOnly); var cancelled = rows.Single(row => row.ExecutionOnly);
+            Check(completed.EstimatedCost == .07m && completed.Status == "成功" && cancelled.Status == "已取消" && cancelled.EndReason == "拒绝工具授权",
+                "Cancelling tool permission lost the completed call charge or changed statuses.");
+            Check(cancelled.EstimateText.Contains("已完成部分") && cancelled.EstimateText.Contains("配置费用 CNY 0.07") && !cancelled.EstimateText.Contains("未计费") && !cancelled.EstimatedCost.HasValue,
+                "The cancelled row does not display known completed fees or incorrectly duplicates a charge.");
+            Check(cancelled.InputText == "20" && cancelled.OutputText == "10" && !cancelled.Input.HasValue && !cancelled.Output.HasValue && !cancelled.TotalInput.HasValue,
+                "Cancelled events must show linked completed input/output without copying tokens into stored raw fields.");
+            var directory = Path.Combine(work, "cancel-cost-storage"); var storage = new StatisticsStore(directory); storage.Append(rows);
+            var restored = storage.Read(); var restoredCancel = restored.Single(row => row.ExecutionOnly);
+            Check(restoredCancel.EstimateText == cancelled.EstimateText && !File.ReadAllText(Path.Combine(directory, "request-statistics.jsonl")).Contains("CompletedCostRows"),
+                "Restart lost cancelled cost links or serialized recursive presentation references.");
+            Check(restoredCancel.InputText == "20" && restoredCancel.OutputText == "10" && restoredCancel.UsageDetails.Contains("同轮已完成"),
+                "Restart lost linked completed token display or provenance.");
+            rate.Input = 900; RequestPricing.Apply(restored.First(), new[] { rate });
+            Check(restoredCancel.EstimateText.Contains("CNY 0.07"), "Historical completed costs changed with today's rates.");
+            Check(RequestCostPresentation.CostScope(restored).Sum(row => row.EstimatedCost ?? 0) == .07m &&
+                RequestCostPresentation.CostScope(new[] { restoredCancel }).Sum(row => row.EstimatedCost ?? 0) == .07m,
+                "Completed cancellation fees were double counted or lost when filtering to cancelled events.");
+            var overview = new StackPanel(); new RequestOverviewLayout(overview).Show(new[] { restoredCancel });
+            overview.Measure(new Size(850, Double.PositiveInfinity)); overview.Arrange(new Rect(0, 0, 850, overview.DesiredSize.Height)); overview.UpdateLayout();
+            Check(String.Join("\n", VisualChildren<TextBlock>(overview).Select(label => label.Text)).Contains("配置费用 CNY 0.07"), "Cancelled-only overview hides the related completed fees.");
+            var linkedSummary = String.Join("\n", VisualChildren<TextBlock>(overview).Select(label => label.Text));
+            Check(linkedSummary.Contains("1 次") && linkedSummary.Contains("20") && linkedSummary.Contains("10"), "Cancelled-only totals do not include linked completed token usage.");
+            var combinedOverview = new StackPanel(); new RequestOverviewLayout(combinedOverview).Show(restored);
+            combinedOverview.Measure(new Size(850, Double.PositiveInfinity)); combinedOverview.Arrange(new Rect(0, 0, 850, combinedOverview.DesiredSize.Height)); combinedOverview.UpdateLayout();
+            Check(String.Join("\n", VisualChildren<TextBlock>(combinedOverview).Select(label => label.Text)) == linkedSummary,
+                "Including the source request and cancelled event double counted token or fee totals.");
+            var detail = new StackPanel(); Theme.Apply(detail.Resources, true); new RequestDetailLayout(detail).Show(restoredCancel);
+            Check(String.Join("\n", LogicalText(detail)).Contains("同轮已完成部分费用"), "Cancelled request details omit its completed fees.");
+            Check(String.Join("\n", LogicalText(detail)).Contains("同轮已完成部分 TOKEN 与缓存"), "Cancelled details do not identify linked token usage.");
+            var cached = new RequestStat { RunId = "cached-cancel", Input = 20, CacheWrite = 30, CacheRead = 40, Output = 0 };
+            var cachedCancel = new RequestStat { RunId = "cached-cancel", ExecutionOnly = true, Status = "已取消" };
+            RequestCostPresentation.Attach(new[] { cached, cachedCancel });
+            Check(cachedCancel.InputText == "90" && cachedCancel.OutputText == "0", "Associated inputs lost caches or zero output.");
+            var missing = new RequestStat { RunId = "cached-cancel", Input = null, Output = 5 };
+            RequestCostPresentation.Attach(new[] { cached, missing, cachedCancel });
+            Check(cachedCancel.InputText == "90*" && cachedCancel.OutputText == "5" && cachedCancel.UsageDetails.Contains("部分调用未返回"),
+                "Partially reported completed usage was treated as a full total or erased known tokens.");
+            var partialUsage = new RequestStat { RunId = "cached-cancel", Input = 7, Output = 2, Incomplete = true, Status = "已取消" };
+            RequestCostPresentation.Attach(new[] { cached, partialUsage });
+            Check(partialUsage.InputText == "7" && partialUsage.OutputText == "2" && partialUsage.CompletedInputTokens == 90,
+                "Linked completed usage overwrote a partial request's own observed tokens.");
+            var legacy = new RequestStat { RunId = "legacy-cancel", ExecutionOnly = true, Status = "已取消", PricingStatus = "请求不完整，未计费" };
+            RequestCostPresentation.Attach(new[] { legacy });
+            Check(legacy.InputText == "—" && legacy.OutputText == "—" && legacy.EstimateText == "请求未完成，费用未知" && !legacy.HasBilledAmount, "Unknown costs were described as free or billed without evidence.");
+            legacy.RunEstimate = .03m;
+            Check(!legacy.EstimateText.Contains("CLI 估算") && !legacy.CostDetails.Contains("CLI 估算") && legacy.RunEstimate == 0.03m && !legacy.HasBilledAmount, "CLI run estimate was hidden or promoted to a gateway bill.");
+            var zero = new RequestStat { RunId = "zero-cancel", EstimatedCost = 0m, EstimateCurrency = "USD", PricingStatus = "已按配置计费" };
+            var zeroCancel = new RequestStat { RunId = "zero-cancel", ExecutionOnly = true, Status = "已取消" };
+            RequestCostPresentation.Attach(new[] { zero, zeroCancel });
+            Check(zeroCancel.EstimateText.Contains("USD 0"), "A reported zero charge was lost.");
+            var billed = new RequestStat { RunId = "mixed-cancel", BilledAmount = 1m, BilledCurrency = "CNY", EstimatedCost = .9m, EstimateCurrency = "CNY" };
+            var estimate = new RequestStat { RunId = "mixed-cancel", EstimatedCost = .2m, EstimateCurrency = "USD", PricingStatus = "公开参考价" };
+            var mixed = new RequestStat { RunId = "mixed-cancel", ExecutionOnly = true, Status = "已取消" };
+            RequestCostPresentation.Attach(new[] { billed, estimate, mixed });
+            Check(mixed.EstimateText.Contains("网关扣费 CNY 1") && mixed.EstimateText.Contains("参考估算 USD 0.2") && !mixed.EstimateText.Contains("1.2"),
+                "Reported charges and reference estimates were mixed or currencies were converted.");
+            RequestCostPresentation.Attach(new[] { mixed });
+            Check(mixed.CompletedCostText.Length == 0, "Removing a source request retained stale linked fees.");
+            var partial = new ClaudeStream();
+            partial.Read("{\"type\":\"assistant\",\"message\":{\"id\":\"partial-with-bill\",\"model\":\"cancel-model\",\"billing\":{\"amount\":0.25,\"currency\":\"CNY\"},\"usage\":{\"input_tokens\":20,\"output_tokens\":2}}}");
+            var interrupted = partial.Statistics(started, null, null, "cancel-model", null, true, false).Single();
+            RequestPricing.Apply(interrupted, new[] { rate });
+            Check(interrupted.Incomplete && interrupted.BilledAmount == .25m && interrupted.EstimateText.Contains("网关扣费 CNY 0.25") && !interrupted.EstimatedCost.HasValue,
+                "Explicit gateway charges were discarded on an interrupted response, or partial local costs were invented.");
+            string preview = Environment.GetEnvironmentVariable("CLAUDEUI_CANCEL_COST_PREVIEW");
+            if (!String.IsNullOrWhiteSpace(preview))
+            {
+                detail.Measure(new Size(810, Double.PositiveInfinity)); detail.Arrange(new Rect(0, 0, 810, detail.DesiredSize.Height)); detail.UpdateLayout();
+                var bitmap = new RenderTargetBitmap(810, (int)Math.Ceiling(detail.ActualHeight), 96, 96, PixelFormats.Pbgra32); bitmap.Render(detail);
+                var png = new PngBitmapEncoder(); png.Frames.Add(BitmapFrame.Create(bitmap)); using (var file = File.Create(preview)) png.Save(file);
+            }
+            Console.WriteLine("PASS cancelled costs: completed fees remain visible, historical links, cancelled-only filters, no double counting, fee snapshots, zero/mixed currencies, explicit partial charges and unknown amounts");
+        }
+
+        private static void CheckStatisticsPagination(string work)
+        {
+            var store = new StatisticsStore(Path.Combine(work, "statistics-pagination"));
+            var source = Enumerable.Range(0, 125).Select(index => new RequestStat { RequestId = "page-" + index.ToString("000"),
+                Model = "page-model", Input = 1, Output = 2, EstimatedCost = 1m, EstimateCurrency = "CNY", PricingStatus = "已按配置计费",
+                Status = "成功", SessionId = index % 2 == 0 ? "even-session" : "odd-session" }).ToList();
+            store.Append(source);
+            var window = (Window)System.Windows.Markup.XamlReader.Load(System.Xml.XmlReader.Create(typeof(Smoke).Assembly.GetManifestResourceStream("ClaudeUI.MainWindow.xaml")));
+            try
+            {
+                var view = new RequestStatisticsView(window, store, new List<RequestRate>(), () => true, (count, all) => true);
+                view.Show("even-session");
+                var list = (ListView)window.FindName("StatsRows");
+                var size = (ComboBox)window.FindName("StatsPageSize");
+                var jump = (TextBox)window.FindName("StatsPageJump");
+                var previous = (Button)window.FindName("StatsPreviousPage");
+                var next = (Button)window.FindName("StatsNextPage");
+                var position = (TextBlock)window.FindName("StatsPagePosition");
+                Action<string> go = value => { jump.Text = value; ((Button)window.FindName("StatsJumpPage")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); };
+                Check((int)size.SelectedItem == 20 && list.Items.Count == 20 && position.Text == "1 / 7" && !previous.IsEnabled && next.IsEnabled &&
+                    ((RequestStat)list.Items[0]).RequestId == "page-124", "Default pagination lost page size, order or navigation boundaries.");
+                string summary = OverviewText(window);
+                Check(summary.Contains("125 次") && summary.Contains("配置费用 CNY 125"), "Pagination limited overall totals to one page.");
+                list.SelectedIndex = 0;
+                next.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Check(position.Text == "2 / 7" && list.SelectedItems.Count == 0 && ((RequestStat)list.Items[0]).RequestId == "page-104" && OverviewText(window) == summary,
+                    "Next page lost its slice, cleared totals or retained hidden selections.");
+                previous.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Check(position.Text == "1 / 7", "Previous page did not return to page one.");
+                go("7");
+                Check(list.Items.Count == 5 && position.Text == "7 / 7" && !next.IsEnabled && previous.IsEnabled, "Last page did not show its remainder.");
+                foreach (string invalid in new[] { "0", "8", "-1", "abc", "", "2147483648", "1.5" })
+                {
+                    go(invalid);
+                    Check(position.Text == "7 / 7" && ((TextBlock)window.FindName("StatsPageError")).Visibility == Visibility.Visible,
+                        "Invalid page changed the current page or had no feedback: " + invalid);
+                }
+                size.SelectedItem = 50;
+                Check(list.Items.Count == 50 && position.Text == "1 / 3", "50-row mode did not reset to page one.");
+                go("3"); Check(list.Items.Count == 25 && position.Text == "3 / 3", "50-row mode lost the last-page remainder.");
+                size.SelectedItem = 100;
+                Check(list.Items.Count == 100 && position.Text == "1 / 2", "100-row mode did not reset to page one.");
+                var pageTestHandle = new System.Windows.Interop.WindowInteropHelper(window).EnsureHandle();
+                jump.Text = "2";
+                var enter = new KeyEventArgs(Keyboard.PrimaryDevice, System.Windows.Interop.HwndSource.FromHwnd(pageTestHandle), 0, Key.Enter) { RoutedEvent = Keyboard.KeyDownEvent };
+                jump.RaiseEvent(enter);
+                Check(enter.Handled && list.Items.Count == 25 && position.Text == "2 / 2", "Enter did not jump to the requested page.");
+                var filter = (TextBox)window.FindName("StatsRequestFilter"); filter.Text = "page-124";
+                Check(list.Items.Count == 1 && position.Text == "1 / 1" && !next.IsEnabled && !previous.IsEnabled, "Filtering did not reset and repaginate.");
+                filter.Text = "no-such-request";
+                Check(list.Items.Count == 0 && position.Text == "1 / 1" && !jump.IsEnabled && !((Button)window.FindName("StatsJumpPage")).IsEnabled,
+                    "Empty results left invalid navigation enabled.");
+                filter.Clear(); size.SelectedItem = 20;
+                var current = (CheckBox)window.FindName("StatsCurrentOnly"); current.IsChecked = true; current.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Check(position.Text == "1 / 4" && ((TextBlock)window.FindName("StatsPageSummary")).Text.Contains("共 63 条"), "Session filtering did not count all matching rows.");
+                current.IsChecked = false; current.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); go("3");
+                string preview = Environment.GetEnvironmentVariable("CLAUDEUI_PAGINATION_PREVIEW");
+                if (!String.IsNullOrWhiteSpace(preview))
+                {
+                    Theme.Apply(window.Resources, true);
+                    ((Grid)window.FindName("StatsPage")).Visibility = Visibility.Visible;
+                    ((Grid)window.FindName("ChatPage")).Visibility = Visibility.Collapsed;
+                    var root = (FrameworkElement)window.Content;
+                    foreach (int width in new[] { 1280, 820 })
+                    {
+                        int height = width == 1280 ? 850 : 700;
+                        root.Measure(new Size(width, height)); root.Arrange(new Rect(0, 0, width, height)); root.UpdateLayout();
+                        var bitmap = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32); bitmap.Render(root);
+                        var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
+                        using (var file = File.Create(preview + "-" + width + ".png")) encoder.Save(file);
+                    }
+                }
+                go("7"); ((Button)window.FindName("StatsSelectAll")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Check(list.SelectedItems.Count == 5, "Select page selected records on other pages.");
+                ((Button)window.FindName("StatsDeleteSelected")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Check(store.Read().Count == 120 && list.Items.Count == 20 && position.Text == "6 / 6", "Deleting the final page did not move back to the last valid page.");
+                ((Button)window.FindName("StatsClearAll")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Check(store.Read().Count == 0 && list.Items.Count == 0 && position.Text == "1 / 1", "Clear-all did not clear records outside the current page.");
+                view.Record(new[] { new RequestStat { Model = "new-model", RequestId = "after-clear" } });
+                Check(list.Items.Count == 1 && position.Text == "1 / 1", "New records did not recover from empty pagination.");
+            }
+            finally { window.Close(); }
+            Console.WriteLine("PASS statistics pagination: 20/50/100 rows, ordering, previous/next, jump/Enter, invalid input, empty/session/ID filters, complete totals, page-scoped selection, deletion bounds and new records");
         }
 
         private static void CheckStatisticsDeletion(string work)
@@ -452,7 +627,22 @@ namespace ClaudeUI
                 var selectedContainer = (ListViewItem)list.ItemContainerGenerator.ContainerFromItem(list.SelectedItems[0]);
                 var clickSelected = new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left) { RoutedEvent = UIElement.PreviewMouseDownEvent };
                 selectedContainer.RaiseEvent(clickSelected);
-                Check(clickSelected.Handled && list.SelectedItems.Count == 2, "Clicking a selected row cleared or toggled the multi-selection: handled=" + clickSelected.Handled + ", count=" + list.SelectedItems.Count);
+                Check(clickSelected.Handled && list.SelectedItems.Count == 1 && !selectedContainer.IsSelected, "Clicking a selected row did not toggle off only that row.");
+                selectedContainer.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left) { RoutedEvent = UIElement.PreviewMouseDownEvent });
+                Check(list.SelectedItems.Count == 2 && selectedContainer.IsSelected, "Clicking the row again did not restore selection.");
+                var scroller = (ScrollViewer)list.Template.FindName("StatsScrollViewer", list);
+                list.Measure(new Size(700, 200)); list.Arrange(new Rect(0, 0, 700, 200)); list.UpdateLayout();
+                Check(scroller.ScrollableWidth > 0, "Statistics test did not create horizontal overflow.");
+                var wheel = new MouseWheelEventArgs(Mouse.PrimaryDevice, 0, -120) { RoutedEvent = UIElement.PreviewMouseWheelEvent };
+                view.ScrollHorizontally(wheel, ModifierKeys.Shift); list.UpdateLayout();
+                Check(wheel.Handled && scroller.HorizontalOffset > 0 && scroller.VerticalOffset == 0, "Shift + wheel did not scroll horizontally.");
+                wheel = new MouseWheelEventArgs(Mouse.PrimaryDevice, 0, 120) { RoutedEvent = UIElement.PreviewMouseWheelEvent };
+                view.ScrollHorizontally(wheel, ModifierKeys.Shift); list.UpdateLayout();
+                Check(wheel.Handled && scroller.HorizontalOffset == 0, "Shift + wheel did not scroll back left.");
+                wheel = new MouseWheelEventArgs(Mouse.PrimaryDevice, 0, -120) { RoutedEvent = UIElement.PreviewMouseWheelEvent };
+                view.ScrollHorizontally(wheel, ModifierKeys.None);
+                Check(!wheel.Handled, "Normal wheel scrolling was intercepted.");
+                list.Measure(new Size(1800, 400)); list.Arrange(new Rect(0, 0, 1800, 400)); list.UpdateLayout();
                 var unselected = list.Items.Cast<RequestStat>().Single(row => !list.SelectedItems.Contains(row));
                 var unselectedContainer = (ListViewItem)list.ItemContainerGenerator.ContainerFromItem(unselected);
                 unselectedContainer.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left) { RoutedEvent = UIElement.PreviewMouseDownEvent });
@@ -572,8 +762,19 @@ namespace ClaudeUI
             namedRow.RequestedModel = null;
             Check(RequestModelDisplay.Resolve(namedRow, new[] { namedProfile }) == namedProfile.Name,
                 "Legacy gateway alias did not resolve to the configured name.");
-            Check(RequestModelDisplay.Resolve(namedRow, new[] { namedProfile, new ModelProfile { Name = "Other", BaseUrl = namedProfile.BaseUrl } }) == "未记录配置名称",
+            Check(RequestModelDisplay.Resolve(namedRow, new[] { namedProfile, new ModelProfile { Name = "Other", BaseUrl = namedProfile.BaseUrl } }) == canonical,
                 "Ambiguous legacy model guessed a configuration name.");
+            var native = new RequestStat { RequestedModelName = "本机默认", Model = "claude-sonnet-4-5" };
+            Check(RequestModelDisplay.Resolve(native, new ModelProfile[0]) == "claude-sonnet-4-5",
+                "Native default model did not display its actual CLI model.");
+            Check(RequestModelDisplay.Resolve(native, new[] { new ModelProfile { Name = "自定义名称", ModelId = native.Model } }) == "claude-sonnet-4-5",
+                "Native default request was mislabeled as a custom configuration.");
+            native.Model = null;
+            Check(RequestModelDisplay.Resolve(native, null) == "未记录模型", "Default request without a response lost its source label.");
+            Check(RequestModelDisplay.Resolve(new RequestStat { Model = canonical }, null) == canonical,
+                "Legacy default-model record did not fall back to its actual model.");
+            Check(RequestModelDisplay.Resolve(new RequestStat { RequestedModel = alias }, null) == alias,
+                "Legacy model fallback lost the requested ID.");
             namedRow.RequestedModelName = "发送时的模型名称";
             Check(RequestModelDisplay.Resolve(namedRow, new ModelProfile[0]) == namedRow.RequestedModelName,
                 "Stored model name was lost after configuration removal.");
@@ -757,11 +958,12 @@ namespace ClaudeUI
                 }
             }
             Theme.Apply(owner.Resources, false); view.Close();
+            CheckBillingRuleDeletion(owner, work, rates[0]);
             var statsWindow = (Window)System.Windows.Markup.XamlReader.Load(System.Xml.XmlReader.Create(typeof(Smoke).Assembly.GetManifestResourceStream("ClaudeUI.MainWindow.xaml")));
             var store = new StatisticsStore(Path.Combine(work, "billing-view"));
             var dashboard = new RequestStatisticsView(statsWindow, store, rates, () => true);
             dashboard.Show(null);
-            Check(((Button)statsWindow.FindName("StatsRatesButton")).IsEnabled, "Empty statistics blocked configuration.");
+            Check(statsWindow.FindName("StatsRatesButton") == null, "Billing configuration entry remained on the statistics page.");
             rates[0] = new RequestRate { Model = "new-model", Currency = "CNY", BillingMode = "Request", Unit = 1, PerRequest = 0.25m };
             var cny = new RequestStat { Model = "new-model", Input = 1, Output = 1 };
             var usd = new RequestStat { Model = "future-model", Input = 1000000, Output = 0 };
@@ -780,6 +982,44 @@ namespace ClaudeUI
             Check(detail.Contains("CNY 0.25") && !detail.Contains("CNY 9"), "Detail recomputed historical cost from latest rule.");
             statsWindow.Close();
             Console.WriteLine("PASS billing UI: empty-state create, edit, enable/disable, mode/unit changes, original-currency totals, historical detail");
+        }
+
+        private static void CheckBillingRuleDeletion(Window owner, string work, RequestRate original)
+        {
+            var rates = new List<RequestRate> { original, new RequestRate { Model = "another-model", Currency = "CNY", Input = 5 } };
+            var disk = new DataStore(Path.Combine(work, "billing-delete"));
+            disk.Save(new AppData { RequestRates = rates });
+            bool approved = false, fail = false; int writes = 0;
+            Func<bool> save = () => { writes++; if (fail) throw new IOException("fixture"); disk.Save(new AppData { RequestRates = rates }); return true; };
+            var dialog = new RequestRatesDialog(owner, rates, save, null, null, rate => approved);
+            var view = dialog.View;
+            var list = BillingControl<ListBox>(view, "计费规则列表");
+            var remove = BillingControl<Button>(view, "删除计费规则");
+            var state = BillingControl<TextBlock>(view, "计费规则编辑状态");
+            Check(list.SelectedItem == original && remove.IsEnabled && state.Text == "编辑计费规则",
+                "Reopening billing settings did not open an existing rule for editing.");
+            remove.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Check(rates.Count == 2 && writes == 0, "Cancelled deletion changed billing settings.");
+            approved = true; fail = true;
+            remove.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Check(rates.Count == 2 && rates[0] == original && disk.Read().RequestRates.Count == 2 && list.SelectedItem == original,
+                "Failed deletion did not preserve the original rule and selection.");
+            fail = false;
+            remove.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Check(rates.Count == 1 && disk.Read().RequestRates.Single().Model == "another-model" && list.SelectedItem == rates[0] && remove.IsEnabled,
+                "Deleting one rule changed other rules or failed to persist.");
+            var snapshot = new RequestStat { Model = "another-model", Input = 1000000, Output = 0 };
+            RequestPricing.Apply(snapshot, rates); decimal? historical = snapshot.EstimatedCost;
+            remove.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Check(rates.Count == 0 && disk.Read().RequestRates.Count == 0 && !remove.IsEnabled && state.Text == "新增计费规则" &&
+                historical == 5m && snapshot.EstimatedCost == historical, "Deleting the last rule lost history or did not reset the form.");
+            Check(RateConfiguration.Delete(rates, original, () => { throw new Exception("must not persist"); }) != null,
+                "Missing rule deletion was accepted.");
+            rates.Add(original);
+            Check(RateConfiguration.Delete(rates, original, () => false) != null && rates.Single() == original,
+                "False persistence result lost the original rule.");
+            view.Close();
+            Console.WriteLine("PASS billing rule deletion: reopen/edit, cancelled confirmation, save failure rollback, original ordering, selected-rule-only deletion, disk reload, empty form and historical snapshots");
         }
 
         private static void CheckUsageDashboard(string work)
@@ -866,6 +1106,74 @@ namespace ClaudeUI
             finally { history.IsEnabled = true; }
         }
 
+        private static void CheckComposerSendState(MainWindow controller)
+        {
+            const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            var kind = typeof(MainWindow); var window = controller.View;
+            var update = kind.GetMethod("UpdateButtons", flags);
+            var cancellationField = kind.GetField("cancellation", flags);
+            var send = (Button)window.FindName("SendButton");
+            var model = (Button)window.FindName("ModelsButton");
+            object modelIcon = model.Content;
+            var arrow = (System.Windows.Shapes.Path)window.FindName("SendArrow");
+            var stop = (System.Windows.Shapes.Rectangle)window.FindName("SendStopIcon");
+            Check(window.FindName("StopButton") == null, "Composer still has an extra stop button beside model settings.");
+            update.Invoke(controller, null);
+            Check(arrow.Visibility == Visibility.Visible && stop.Visibility == Visibility.Collapsed, "Idle send icon was not restored.");
+            using (var token = new CancellationTokenSource())
+            {
+                cancellationField.SetValue(controller, token);
+                try
+                {
+                    update.Invoke(controller, null);
+                    Check(send.IsEnabled && arrow.Visibility == Visibility.Collapsed && stop.Visibility == Visibility.Visible &&
+                        ((string)send.ToolTip).Contains("运行中") && ReferenceEquals(model.Content, modelIcon) && !model.IsEnabled,
+                        "Running request did not replace the send action with stop while preserving the model icon.");
+                    send.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    Check(token.IsCancellationRequested && ((string)send.ToolTip).Contains("正在停止"), "Clicking the running send button did not cancel the request.");
+                }
+                finally { cancellationField.SetValue(controller, null); update.Invoke(controller, null); }
+            }
+            Check(arrow.Visibility == Visibility.Visible && stop.Visibility == Visibility.Collapsed && (string)send.ToolTip == "发送消息（Enter）" && model.IsEnabled,
+                "Completing the request did not restore send and model controls.");
+            Console.WriteLine("PASS composer send action: idle arrow, in-place running stop icon, unchanged model icon, click cancellation, stopping feedback and restored controls");
+        }
+
+        private static void CheckDialogVisuals(Window owner)
+        {
+            object originalTextStyle = owner.TryFindResource(typeof(TextBox));
+            foreach (bool dark in new[] { true, false })
+            {
+                Theme.Apply(owner.Resources, dark);
+                MessageBoxResult result = MessageBoxResult.None;
+                var dialog = DialogVisuals.CreateMessage(owner, "删除选中的 3 条请求统计？\n此操作不可撤销，只删除统计记录。", "删除请求统计",
+                    MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No, value => result = value);
+                dialog.ApplyTemplate();
+                var surface = (FrameworkElement)VisualTreeHelper.GetChild(dialog, 0);
+                surface.Measure(new Size(500, Double.PositiveInfinity));
+                surface.Arrange(new Rect(0, 0, 500, surface.DesiredSize.Height)); surface.UpdateLayout();
+                Check(dialog.WindowStyle == WindowStyle.None && dialog.Template.FindName("DialogClose", dialog) is Button,
+                    "Themed dialog is missing its title bar or close button.");
+                Check(ReferenceEquals(originalTextStyle, owner.TryFindResource(typeof(TextBox))), "Dialog styles changed the main window resources.");
+                var buttons = VisualChildren<Button>((FrameworkElement)dialog.Content).ToList();
+                Check(buttons.Count == 2 && buttons.Single(button => button.IsDefault).IsCancel, "Destructive confirmation lost its safe default.");
+                string preview = Environment.GetEnvironmentVariable("CLAUDEUI_DIALOG_PREVIEW");
+                if (!String.IsNullOrWhiteSpace(preview))
+                {
+                    var bitmap = new RenderTargetBitmap(500, (int)Math.Ceiling(surface.ActualHeight), 96, 96, PixelFormats.Pbgra32);
+                    bitmap.Render(surface); var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
+                    using (var file = File.Create(preview + (dark ? "-dark.png" : "-light.png"))) encoder.Save(file);
+                }
+                dialog.Close();
+                Check(result == MessageBoxResult.No, "Closing the confirmation approved a destructive action.");
+                result = MessageBoxResult.None;
+                dialog = DialogVisuals.CreateMessage(owner, "确认消息", "提示", MessageBoxButton.YesNo, MessageBoxImage.None, MessageBoxResult.No, value => result = value);
+                VisualChildren<Button>((FrameworkElement)dialog.Content).Single(button => (string)button.Content == "确认").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Check(result == MessageBoxResult.Yes, "Explicit confirmation did not return Yes.");
+            }
+            Console.WriteLine("PASS themed dialogs: both themes, custom chrome, isolated input styles, safe default/close and explicit confirmation");
+        }
+
         private static void CheckRequestDetailLayout()
         {
             var host = new StackPanel();
@@ -881,8 +1189,7 @@ namespace ClaudeUI
             host.Measure(new Size(850, Double.PositiveInfinity));
             host.Arrange(new Rect(0, 0, 850, host.DesiredSize.Height)); host.UpdateLayout();
             string text = String.Join("\n", VisualChildren<TextBlock>(host).Select(label => label.Text));
-            Check(!text.Contains("网关实际扣费") && text.Contains("本轮 CLI 估算合计") && text.Contains("USD 0.027556") &&
-                text.Contains("不是单次请求费用") && !text.Contains("缓存命中占比") && text.Contains("1.847 s") && text.Contains("15.087 s"),
+            Check(!text.Contains("网关实际扣费") && !text.Contains("CLI 估算") && !text.Contains("USD 0.027556") && !text.Contains("缓存命中占比") && text.Contains("1.847 s") && text.Contains("15.087 s"),
                 "Grouped request details confused missing billing, run-level estimates or timing scope.");
             var fields = VisualChildren<TextBox>(host).ToList();
             Check(fields.All(field => field.IsReadOnly && field.TextWrapping == TextWrapping.Wrap) &&
@@ -898,7 +1205,7 @@ namespace ClaudeUI
             Check(text.Contains("未记录响应耗时") && !text.Contains("缓存命中占比"), "Unknown usage or duration was replaced with a fabricated value.");
             layout.Show(null);
             Check(host.Children.Count == 1, "Clearing selection left stale request details.");
-            Console.WriteLine("PASS request detail cards: missing and zero charges, run-level estimates, duration scope, token usage, selectable provenance and clearing selection");
+            Console.WriteLine("PASS request detail cards: missing and zero charges, hidden CLI cost estimates, duration scope, token usage, selectable provenance and clearing selection");
         }
 
         private static string OverviewText(Window window)
@@ -1081,6 +1388,41 @@ namespace ClaudeUI
             Console.WriteLine("PASS CLI output presentation, literal text, raw log switching, theme colors, and output limits");
         }
 
+        private static void CheckRunningNavigation(MainWindow controller)
+        {
+            var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            var type = typeof(MainWindow);
+            var current = (Conversation)type.GetField("current", flags).GetValue(controller);
+            var cancel = type.GetField("cancellation", flags);
+            var streamField = type.GetField("stream", flags);
+            var previousStream = streamField.GetValue(controller);
+            var token = new CancellationTokenSource();
+            try
+            {
+                cancel.SetValue(controller, token);
+                streamField.SetValue(controller, new ClaudeStream());
+                type.GetMethod("UpdateButtons", flags).Invoke(controller, null);
+                Check(current.IsTaskRunning && current.CanNavigate, "Running conversation is not marked or navigable.");
+                var window = controller.View;
+                Check(((ListBox)window.FindName("HistoryList")).IsEnabled && ((StackPanel)window.FindName("ProjectList")).IsEnabled,
+                    "Sidebar remains disabled while running.");
+                type.GetMethod("ShowStatistics", flags).Invoke(controller, null);
+                type.GetMethod("OpenConversationAsync", flags).Invoke(controller, new object[] { current });
+                Check(((Grid)window.FindName("ChatPage")).Visibility == Visibility.Visible &&
+                    Object.ReferenceEquals(type.GetField("current", flags).GetValue(controller), current),
+                    "Returning to running conversation replaced its live context.");
+                type.GetMethod("OpenConversationAsync", flags).Invoke(controller, new object[] { new Conversation() });
+                Check(Object.ReferenceEquals(type.GetField("current", flags).GetValue(controller), current), "Running context switched to another conversation.");
+            }
+            finally
+            {
+                cancel.SetValue(controller, null); streamField.SetValue(controller, previousStream); token.Dispose();
+                type.GetMethod("UpdateButtons", flags).Invoke(controller, null);
+            }
+            Check(!current.IsTaskRunning && current.CanNavigate, "Finished conversation retained running state.");
+            Console.WriteLine("PASS running navigation: live context preserved, sidebar enabled, task marker lifecycle and other-session guard");
+        }
+
         private static void CheckReplyProgress(MainWindow controller, DataStore store)
         {
             const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
@@ -1135,13 +1477,19 @@ namespace ClaudeUI
             Check(restored.Visibility == Visibility.Visible && restored.Summary.Stages.Count == saved.RunSummary.Stages.Count, "Saved progress was not restored.");
             Check(restored.Summary.RequestIds.Single() == progressRequestId, "Request ID did not survive reply persistence and restoration.");
             var restoredPanel = (StackPanel)restored.Child;
-            var requestText = restoredPanel.Children.OfType<TextBox>().Single();
+            var requestFold = restoredPanel.Children.OfType<Expander>().Single(item => item.Content is TextBox);
+            Check(!requestFold.IsExpanded && requestFold.Visibility == Visibility.Visible, "Request IDs must start collapsed.");
+            requestFold.IsExpanded = true;
+            var requestText = (TextBox)requestFold.Content;
             requestText.SelectAll();
             Check(requestText.IsReadOnly && requestText.TextWrapping == TextWrapping.Wrap && requestText.SelectedText == "请求 ID：" + progressRequestId,
                 "The reply footer request ID was truncated or not selectable.");
             restored.SetRequestIds(new[] { progressRequestId, "second-request", progressRequestId });
             Check(restored.Summary.RequestIds.Count == 2 && requestText.Text.Contains(Environment.NewLine + "请求 ID：second-request"),
                 "Multiple request IDs were omitted or duplicated in the footer.");
+            Check(requestFold.IsExpanded, "Streaming request IDs reset the expansion state.");
+            requestFold.IsExpanded = false;
+            Check(requestText.Text.Contains("second-request"), "Collapsing request IDs lost content.");
             var legacy = new ReplyProgressView((ImageSource)window.Resources["BrandIcon"]);
             legacy.Restore(null);
             Check(legacy.Visibility == Visibility.Collapsed, "Legacy replies acquired fabricated progress.");
@@ -1233,6 +1581,64 @@ namespace ClaudeUI
                 recovered.Messages[1].RunSummary.Status == "执行失败" && recovered.Messages[3].Text == "成功",
                 "Recovering the failed session duplicated or lost its failed turn, subsequent messages, or metadata.");
             Console.WriteLine("PASS failed session linking, duplicate recovery, and independent same-title chats");
+        }
+
+        private static void CheckConversationDeletion(string work)
+        {
+            var root = Path.Combine(work, "delete-fixture");
+            var project = Path.Combine(root, "workspace");
+            var cli = Path.Combine(root, "cli");
+            var store = new DataStore(Path.Combine(root, "data"));
+            var projectStorage = Path.Combine(cli, "projects", "workspace");
+            Directory.CreateDirectory(project);
+            Directory.CreateDirectory(projectStorage);
+            string id = Guid.NewGuid().ToString(), other = Guid.NewGuid().ToString();
+            string ownTranscript = Path.Combine(projectStorage, id + ".jsonl");
+            string otherTranscript = Path.Combine(projectStorage, other + ".jsonl");
+            var json = new System.Web.Script.Serialization.JavaScriptSerializer();
+            string transcript = json.Serialize(new { type = "user", cwd = project, message = new { content = "same title" } });
+            File.WriteAllText(ownTranscript, transcript);
+            File.WriteAllText(otherTranscript, transcript);
+            string history = Path.Combine(cli, "history.jsonl");
+            string otherHistory = json.Serialize(new { sessionId = other, project = project });
+            File.WriteAllLines(history, new[] { json.Serialize(new { sessionId = id, project = project }), otherHistory });
+            string child = Path.Combine(projectStorage, id, "subagents");
+            Directory.CreateDirectory(child);
+            File.WriteAllText(Path.Combine(child, "agent.jsonl"), "child");
+            string original = Path.Combine(project, "file.txt");
+            File.WriteAllText(original, "original");
+            var ownAttachment = AttachmentFiles.Import(original, store.AttachmentDirectory);
+            var shared = AttachmentFiles.Import(original, store.AttachmentDirectory);
+            var cliShared = AttachmentFiles.Import(original, store.AttachmentDirectory);
+            File.AppendAllText(otherTranscript, Environment.NewLine + json.Serialize(new { type = "user", cwd = project,
+                message = new { content = cliShared.LocalPath } }));
+            var target = new Conversation { SessionId = id, Workspace = project, CliConfigDirectory = cli,
+                DraftAttachments = new List<ChatAttachment> { ownAttachment, shared, cliShared, new ChatAttachment { LocalPath = original } } };
+            var remaining = new Conversation { SessionId = other, Workspace = project,
+                CliTranscriptPath = otherTranscript, DraftAttachments = new List<ChatAttachment> { shared } };
+            target.Messages.Add(new StoredMessage { Role = "assistant", RunSummary = new ChatRunSummary {
+                RequestIds = new List<string> { "local", "shared" } } });
+            remaining.Messages.Add(new StoredMessage { Role = "assistant", RunSummary = new ChatRunSummary {
+                RequestIds = new List<string> { "shared" } } });
+            store.Statistics.Append(new[] { new RequestStat { SessionId = id }, new RequestStat { SessionId = other },
+                new RequestStat { RequestId = "local" }, new RequestStat { RequestId = "shared" } });
+
+            var wrongProject = new Conversation { SessionId = id, Workspace = root, CliConfigDirectory = cli };
+            bool blocked = false;
+            try { ConversationDeletion.DeleteRecords(store, wrongProject, new[] { remaining }, new[] { cli }); }
+            catch (IOException) { blocked = true; }
+            Check(blocked && File.Exists(ownTranscript) && File.ReadAllLines(history).Length == 2,
+                "Deleting a session owned by another workspace was not blocked before modifying files.");
+            ConversationDeletion.DeleteRecords(store, target, new[] { remaining }, new[] { cli });
+            ConversationDeletion.DeleteRecords(store, target, new[] { remaining }, new[] { cli });
+            Check(!File.Exists(ownTranscript) && !Directory.Exists(Path.Combine(projectStorage, id)) &&
+                File.Exists(otherTranscript) && File.ReadAllLines(history).SequenceEqual(new[] { otherHistory }),
+                "Conversation deletion changed another session or left its own CLI records.");
+            Check(!File.Exists(ownAttachment.LocalPath) && File.Exists(shared.LocalPath) && File.Exists(cliShared.LocalPath) && File.Exists(original) &&
+                store.Statistics.Read().Count == 2 && store.Statistics.Read().Any(row => row.SessionId == other) &&
+                store.Statistics.Read().Any(row => row.RequestId == "shared"),
+                "Conversation deletion removed a project file or shared record, or missed an owned record.");
+            Console.WriteLine("PASS permanent conversation deletion, idempotent retry, and unrelated files preserved");
         }
 
         private static CliCatalogSnapshot CheckCliCatalog(string work)
@@ -1486,7 +1892,7 @@ namespace ClaudeUI
                 ((ListBox)controller.View.FindName("HistoryList")).Items.Contains(imported) && imported.Workspace == projectFolder,
                 "Removed project returned after catalog refresh or lost its sessions.");
             Check(controller.CreateSessionMenu(imported).Items.OfType<MenuItem>().Select(item => (string)item.Header)
-                .SequenceEqual(new[] { "压缩上下文", "重命名…", "创建分支…", "复制会话 ID", "从对话列表移除…" }),
+                .SequenceEqual(new[] { "压缩上下文", "重命名…", "创建分支…", "复制会话 ID", "从对话列表移除…", "彻底删除…" }),
                 "Project session actions were not preserved.");
             var projectState = data.ProjectStates.Single(item => item.Folder == projectFolder);
             projectState.IsRemoved = false;
@@ -2142,7 +2548,7 @@ namespace ClaudeUI
                     "The session menu gutter does not match the themed surface.");
             }
             var firstItem = (MenuItem)menu.Items[0];
-            Check(firstItem.ActualHeight > 0 && (string)firstItem.Header == "压缩上下文" && menu.Items.Count == 6 &&
+            Check(firstItem.ActualHeight > 0 && (string)firstItem.Header == "压缩上下文" && menu.Items.Count == 7 &&
                 menu.Items.OfType<MenuItem>().All(item => item.Icon is System.Windows.Shapes.Path) &&
                 !menu.Items.OfType<MenuItem>().Any(item => (string)item.Header == "继续对话"),
                 "Session actions are missing from the rendered menu.");

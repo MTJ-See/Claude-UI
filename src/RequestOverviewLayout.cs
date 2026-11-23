@@ -15,9 +15,10 @@ namespace ClaudeUI
         public void Show(IList<RequestStat> visible)
         {
             host.Children.Clear();
-            var calls = visible.Where(row => !row.ExecutionOnly).ToList();
+            var costScope = RequestCostPresentation.CostScope(visible);
+            var calls = costScope.Where(row => !row.ExecutionOnly).ToList();
             var metrics = new ResponsiveCardPanel { MaximumColumns = 4, MinimumColumnWidth = 100, Gap = 12 };
-            metrics.Children.Add(Card("模型调用", calls.Count.ToString("N0") + " 次", "当前筛选范围", 24));
+            metrics.Children.Add(Card("模型调用", calls.Count.ToString("N0") + " 次", "当前筛选范围，含关联的已完成调用；按源请求去重", 24));
             var inputs = calls.Where(row => row.TotalInput.HasValue).ToList();
             var outputs = calls.Where(row => row.Output.HasValue).ToList();
             metrics.Children.Add(Card("输入 TOKEN", inputs.Count == 0 ? "—" : inputs.Sum(row => row.TotalInput.Value).ToString("N0"),
@@ -26,14 +27,14 @@ namespace ClaudeUI
                 outputs.Count < calls.Count ? "部分用量未返回" : "已报告的输出用量", 24));
 
             var costs = new List<Border>();
-            var estimates = visible.Where(row => row.EstimatedCost.HasValue)
+            var estimates = costScope.Where(row => row.EstimatedCost.HasValue)
                 .GroupBy(row => new { row.EstimateCurrency, Configured = row.PricingStatus == "已按配置计费" })
                 .OrderBy(group => group.Key.EstimateCurrency).ThenByDescending(group => group.Key.Configured)
                 .Select(group => (group.Key.Configured ? "配置费用 " : "参考估算 ") + GatewayCharge.Format(group.Sum(row => row.EstimatedCost.Value), group.Key.EstimateCurrency));
             string estimate = String.Join(Environment.NewLine, estimates);
-            int noEstimate = calls.Count(row => !row.EstimatedCost.HasValue);
+            int noEstimate = costScope.Count(row => !row.ExecutionOnly && !row.EstimatedCost.HasValue);
             costs.Add(Card("本地费用（非账单）", String.IsNullOrWhiteSpace(estimate) ? "未估算" : estimate,
-                "非网关账单" + (noEstimate > 0 ? " · " + noEstimate + " 次未估算" : " · 已估算全部调用"), 14));
+                "非网关账单；含关联的已完成调用，按源请求去重" + (noEstimate > 0 ? " · " + noEstimate + " 次未估算" : " · 已估算全部调用"), 14));
             foreach (var card in costs) metrics.Children.Add(card);
             host.Children.Add(metrics);
         }

@@ -83,7 +83,7 @@ namespace ClaudeUI
         {
             if (item.Provider != "modelscope" || !Regex.IsMatch(item.Id ?? "", "^@?[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$"))
                 throw new InvalidOperationException("该 Skill 没有可识别的魔搭下载地址。");
-            return "https://www.modelscope.cn/skills/" + String.Join("/", item.Id.TrimStart('@').Split('/').Select(Uri.EscapeDataString)) + "/archive/zip/master";
+            return "https://www.modelscope.cn/skills/" + String.Join("/", item.Id.Split('/').Select(segment => Uri.EscapeDataString(segment).Replace("%40", "@"))) + "/archive/zip/master";
         }
         internal static void CheckTree(string root)
         {
@@ -142,6 +142,7 @@ namespace ClaudeUI
             try
             {
                 string archive = Path.Combine(staging, "download.zip"), unpacked = Path.Combine(staging, "unpacked");
+                log("安装 Skill：" + item.Name + "（" + item.Id + "）");
                 log("下载魔搭官方 Skill 发布包…");
                 await Task.Run(() => Download(url, archive, credential, log, token), token);
                 log("校验并解压文件…");
@@ -179,6 +180,7 @@ namespace ClaudeUI
                 if (uri.Scheme != "https" || uri.IsLoopback || uri.UserInfo.Length > 0) throw new InvalidOperationException("下载地址不安全。");
                 var request = (HttpWebRequest)WebRequest.Create(uri);
                 request.Timeout = request.ReadWriteTimeout = 30000; request.AllowAutoRedirect = false;
+                request.UserAgent = "ClaudeUI-Marketplace/1.0";
                 if ((uri.Host == "modelscope.cn" || uri.Host == "www.modelscope.cn") && !String.IsNullOrWhiteSpace(credential))
                     request.Headers[HttpRequestHeader.Authorization] = "Bearer " + credential;
                 using (token.Register(request.Abort))
@@ -213,7 +215,18 @@ namespace ClaudeUI
                     {
                         if (response != null && ((int)response.StatusCode == 401 || (int)response.StatusCode == 403))
                             throw new InvalidOperationException("下载被拒绝，请检查魔搭 Token 或 Skill 访问权限。");
-                        throw new InvalidOperationException("Skill 下载失败，请检查网络后重试。");
+                        int status = response == null ? 0 : (int)response.StatusCode;
+                        string host = uri.Host;
+                        string reason;
+                        if (status == 404) reason = "发布包不存在或已下架（HTTP 404）";
+                        else if (status == 429) reason = "请求被限流（HTTP 429），请稍后重试";
+                        else if (status >= 500) reason = "魔搭下载服务暂时异常（HTTP " + status + "），请稍后重试";
+                        else if (status > 0) reason = "下载端点返回 HTTP " + status;
+                        else if (ex.Status == WebExceptionStatus.Timeout) reason = "连接或读取超时";
+                        else if (ex.Status == WebExceptionStatus.NameResolutionFailure || ex.Status == WebExceptionStatus.ProxyNameResolutionFailure) reason = "域名或代理解析失败";
+                        else if (ex.Status == WebExceptionStatus.TrustFailure || ex.Status == WebExceptionStatus.SecureChannelFailure) reason = "HTTPS 证书或 TLS 连接失败";
+                        else reason = "连接失败（" + ex.Status + "）";
+                        throw new InvalidOperationException("Skill 下载失败：" + reason + "；下载主机：" + host + "。", ex);
                     }
                 }
             }
@@ -291,6 +304,19 @@ namespace ClaudeUI
             var sequence = node as IEnumerable;
             if (sequence != null) foreach (var value in sequence) Gather(value, values);
         }
+        internal static bool IsMissingMcp(string output)
+        {
+            string plain = Regex.Replace(output ?? "", @"\x1B\[[0-?]*[ -/]*[@-~]", "");
+            return Regex.IsMatch(plain, @"\bNo MCP server (?:found\b|named\s+|with (?:the )?name\b)", RegexOptions.IgnoreCase);
+        }
+        private static string CliFailure(string output)
+        {
+            if (Regex.IsMatch(output, "(?i)nested|inside another|CLAUDECODE")) return "CLI 拒绝嵌套运行";
+            if (Regex.IsMatch(output, "(?i)unknown command|unknown option|unrecognized")) return "CLI 命令或参数不受支持";
+            if (Regex.IsMatch(output, "(?i)json|parse|syntax|invalid config")) return "CLI 配置格式错误";
+            if (Regex.IsMatch(output, "(?i)permission|EACCES|EPERM|access.*denied")) return "配置目录权限不足";
+            return "CLI 未返回可识别的名称检查结果";
+        }
         internal static async Task CheckMcpConflict(MarketplaceInstallContext context, string name, Action<string> log, CancellationToken token)
         {
             if (!Regex.IsMatch(name ?? "", "^[a-zA-Z0-9_-]{1,64}$")) throw new InvalidOperationException("MCP 名称只能包含英文字母、数字、下划线或连字符。");
@@ -311,8 +337,8 @@ namespace ClaudeUI
                 }
                 catch (OperationCanceledException) { token.ThrowIfCancellationRequested(); throw new InvalidOperationException("同名配置检查超时，安装已停止，请检查 Claude CLI。"); }
                 if (exists == 0) throw new InvalidOperationException("已存在同名 MCP，请修改安装名称。原配置未修改。");
-                if (output.ToString().IndexOf("No MCP server found", StringComparison.OrdinalIgnoreCase) < 0)
-                    throw new InvalidOperationException("无法确认 MCP 名称是否可用，请检查 CLI 状态后重试。");
+                if (!IsMissingMcp(output.ToString()))
+                    throw new InvalidOperationException("无法确认 MCP 名称是否可用（CLI 退出码 " + exists + "，" + CliFailure(output.ToString()) + "），安装已停止。请在 CLI 工具中查看健康诊断。");
             }
         }
         internal static async Task InstallMcp(MarketplaceInstallContext context, string name, string scope, Dictionary<string, object> config, Action<string> log, CancellationToken token)

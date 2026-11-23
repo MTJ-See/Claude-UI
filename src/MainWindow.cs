@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -24,6 +24,7 @@ namespace ClaudeUI
 {
     internal sealed class MainWindow
     {
+        private readonly HashSet<string> deletedSessions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly Window window;
         private readonly SidebarResizer sidebarResizer;
         private readonly RequestDetailResizer requestDetailResizer;
@@ -209,7 +210,7 @@ namespace ClaudeUI
             BindPromptSuggestion("ExplorePromptButton", "请先梳理当前项目的目录结构，说明主要模块、入口和运行方式。");
             BindPromptSuggestion("ReviewPromptButton", "请检查当前项目的代码，优先找出可能导致错误的问题，并说明原因和修复建议。");
             BindPromptSuggestion("PlanPromptButton", "我想在当前项目中完成一个新任务，请先和我确认目标，再把实现过程拆成可执行的步骤。");
-            Button("SendButton").Click += async delegate { await Send(); };
+            Button("SendButton").Click += async delegate { if (Busy) Stop(); else await Send(); };
             Button("AttachButton").Click += delegate {
                 if (Busy || loadingConversation) return;
                 var picker = new OpenFileDialog { Multiselect = true, Title = "添加附件", Filter = "所有文件|*.*" };
@@ -233,7 +234,6 @@ namespace ClaudeUI
             sessionModel.SelectionChanged += FollowModelSelection;
             var modelMenu = new ContextMenu(); var configureModel = new MenuItem { Header = "模型配置…" };
             configureModel.Click += delegate { ConfigureModels(); }; modelMenu.Items.Add(configureModel); sessionModel.ContextMenu = modelMenu;
-            Button("StopButton").Click += delegate { Stop(); };
             Button("StopToolButton").Click += delegate { Stop(); };
             Button("AllowToolPermission").Click += delegate { if (permissionDecision != null) permissionDecision.TrySetResult(true); };
             Button("DenyToolPermission").Click += delegate { if (permissionDecision != null) permissionDecision.TrySetResult(false); };
@@ -252,6 +252,9 @@ namespace ClaudeUI
             };
             Button("CloseButton").Click += delegate { window.Close(); };
             window.StateChanged += delegate { Button("MaxButton").Content = window.WindowState == WindowState.Maximized ? "\uE923" : "\uE922"; };
+            var conversationStyle = new Style(typeof(ListBoxItem), history.ItemContainerStyle);
+            conversationStyle.Setters.Add(new Setter(UIElement.IsEnabledProperty, new System.Windows.Data.Binding("CanNavigate")));
+            history.ItemContainerStyle = conversationStyle;
             history.SelectionChanged += async delegate
             {
                 var selected = history.SelectedItem as Conversation;
@@ -396,7 +399,8 @@ namespace ClaudeUI
         private void ConfigureModels()
         {
             if (Busy) return;
-            var dialog = new ModelProfilesDialog(window, data.ModelProfiles, current.ModelProfileId, TestModelProfile);
+            var dialog = new ModelProfilesDialog(window, data.ModelProfiles, current.ModelProfileId, TestModelProfile,
+                (owner, profile) => statistics.EditRate(owner, profile));
             if (!dialog.ShowDialog()) return;
             var previous = data.ModelProfiles;
             var updated = new List<ModelProfile>(previous);
@@ -438,10 +442,7 @@ namespace ClaudeUI
             refreshingCatalog = true;
             try
             {
-                var roots = data.Conversations.Select(item => item.CliConfigDirectory).Where(path => !String.IsNullOrWhiteSpace(path)).ToList();
-                roots.Add(Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR"));
-                roots.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude"));
-                roots.Add(Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "CLI_DefaultWorkSpace")));
+                var roots = CatalogRoots();
                 var snapshot = await Task.Run(() => catalog.Read(roots));
                 if (closing || Busy || loadingConversation) return;
                 MergeCatalog(snapshot);
@@ -457,13 +458,23 @@ namespace ClaudeUI
             finally { refreshingCatalog = false; }
         }
 
+        private string[] CatalogRoots()
+        {
+            return data.Conversations.Select(item => item.CliConfigDirectory).Concat(new[] {
+                Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude"),
+                Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "CLI_DefaultWorkSpace"))
+            }).Where(path => !String.IsNullOrWhiteSpace(path)).ToArray();
+        }
+
         private void MergeCatalog(CliCatalogSnapshot snapshot)
         {
             foreach (string folder in snapshot.Projects)
                 if (!data.ProjectFolders.Contains(folder, StringComparer.OrdinalIgnoreCase)) data.ProjectFolders.Add(folder);
             foreach (var imported in snapshot.Conversations)
             {
-                if (data.HiddenCliSessions.Contains(CliConversationCatalog.Key(imported), StringComparer.OrdinalIgnoreCase)) continue;
+                string key = CliConversationCatalog.Key(imported);
+                if (deletedSessions.Contains(key) || data.HiddenCliSessions.Contains(key, StringComparer.OrdinalIgnoreCase)) continue;
                 var existing = data.Conversations.FirstOrDefault(item => item.SessionId == imported.SessionId && SameWorkspace(item.Workspace, imported.Workspace));
                 if (existing == null || existing.Id.StartsWith("cli:", StringComparison.Ordinal))
                     existing = RecoverFailedSession(snapshot, imported, existing);
@@ -514,7 +525,12 @@ namespace ClaudeUI
 
         private async Task OpenConversationAsync(Conversation conversation)
         {
-            if (Busy || conversation == null) return;
+            if (conversation == null) return;
+            if (Busy)
+            {
+                if (conversation == current) ShowTools(false);
+                return;
+            }
             int revision = ++conversationRevision;
             if (!String.IsNullOrWhiteSpace(conversation.CliTranscriptPath) && File.Exists(conversation.CliTranscriptPath))
             {
@@ -634,6 +650,8 @@ namespace ClaudeUI
             AddSessionItem(menu, "复制会话 ID", () => CopySessionId(sessionId.ToString()), hasSession, vectorIcon: "copy");
             menu.Items.Add(new Separator { Style = (Style)window.Resources["SessionMenuSeparator"] });
             AddSessionItem(menu, "从对话列表移除…", () => RemoveRecent(conversation), true, "移除本应用保存的记录，Claude CLI 会话仍可接续。", vectorIcon: "remove");
+            AddSessionItem(menu, "彻底删除…", () => DeleteConversation(conversation), true,
+                "永久删除这条对话及其在本机的会话记录。", vectorIcon: "trash");
             return menu;
         }
 
@@ -702,9 +720,10 @@ namespace ClaudeUI
         private void AddSessionItem(ContextMenu menu, string text, Action action, bool enabled = true, string hint = null, string glyph = null, string vectorIcon = null)
         {
             bool projectAction = vectorIcon != null;
-            var item = new MenuItem { Header = text, Tag = vectorIcon == "remove" ? "RemoveProject" : glyph, IsEnabled = enabled, ToolTip = hint,
+            bool destructive = vectorIcon == "remove" || vectorIcon == "trash";
+            var item = new MenuItem { Header = text, Tag = destructive ? "RemoveProject" : glyph, IsEnabled = enabled, ToolTip = hint,
                 Style = (Style)window.Resources[projectAction ? "ProjectActionItem" : "SessionMenuItem"] };
-            if (projectAction) item.Icon = ProjectActionVisuals.Icon(vectorIcon, vectorIcon == "remove");
+            if (projectAction) item.Icon = ProjectActionVisuals.Icon(vectorIcon, destructive);
             System.Windows.Automation.AutomationProperties.SetName(item, text);
             ToolTipService.SetShowOnDisabled(item, true);
             item.Click += delegate { if (!Busy) action(); };
@@ -724,7 +743,7 @@ namespace ClaudeUI
             int index = data.Conversations.IndexOf(conversation);
             if (index < 0) return;
             string details = "从对话列表中移除「" + conversation.Title + "」？\n\n此操作会清除 Claude UI 保存的这条记录。Claude CLI 保存的原始会话会保留。";
-            if (MessageBox.Show(window, details, "从对话列表移除", MessageBoxButton.YesNo,
+            if (DialogVisuals.Show(window, details, "从对话列表移除", MessageBoxButton.YesNo,
                 MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
             string hidden = CliConversationCatalog.Key(conversation);
             if (!data.HiddenCliSessions.Contains(hidden, StringComparer.OrdinalIgnoreCase)) data.HiddenCliSessions.Add(hidden);
@@ -739,6 +758,39 @@ namespace ClaudeUI
                 OpenWorkspace(conversation.Workspace);
             else UpdateHistory();
             ChatStatus("已从对话列表移除。", "Success");
+        }
+
+        private void DeleteConversation(Conversation conversation)
+        {
+            if (loadingConversation || !data.Conversations.Contains(conversation)) return;
+            string details = "彻底删除「" + conversation.Title + "」？\n\n这会永久删除该对话、Claude CLI 会话文件、关联的本地请求统计和专属附件副本。此操作无法撤销。";
+            if (DialogVisuals.Show(window, details, "彻底删除对话", MessageBoxButton.YesNo,
+                MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes) return;
+            int index = data.Conversations.IndexOf(conversation);
+            if (index < 0 || Busy || loadingConversation) return;
+            try
+            {
+                ConversationDeletion.DeleteRecords(store, conversation,
+                    data.Conversations.Where(item => item != conversation), CatalogRoots());
+            }
+            catch (Exception ex)
+            {
+                if (!(ex is IOException) && !(ex is UnauthorizedAccessException) && !(ex is ArgumentException)) throw;
+                ChatStatus("删除未完成，可重试 · " + ex.Message, "Failure");
+                return;
+            }
+            data.Conversations.RemoveAt(index);
+            if (!Save())
+            {
+                data.Conversations.Insert(index, conversation);
+                ChatStatus("删除未完成，无法更新对话列表，可重试。", "Failure");
+                return;
+            }
+            deletedSessions.Add(CliConversationCatalog.Key(conversation));
+            if (current == conversation) { OpenWorkspace(conversation.Workspace); Save(); }
+            else UpdateHistory();
+            if (Find<Grid>("StatsPage").IsVisible) statistics.Show(current.SessionId);
+            ChatStatus("已彻底删除对话。", "Success");
         }
 
         private async Task EditSession(Conversation conversation, bool fork)
@@ -811,6 +863,7 @@ namespace ClaudeUI
             buttons.Children.Add(cancelButton);
             buttons.Children.Add(confirm);
             panel.Children.Add(buttons);
+            DialogVisuals.Apply(dialog);
             dialog.Content = panel;
             dialog.Loaded += delegate { field.Focus(); field.SelectAll(); };
             return dialog.ShowDialog() == true ? field.Text.Trim() : null;
@@ -1145,7 +1198,7 @@ namespace ClaudeUI
             requestGateway = null;
             costBaseline = null;
             requestedModel = options.Model;
-            requestedModelName = selected == null ? null : selected.Name;
+            requestedModelName = selected == null ? "本机默认" : selected.Name;
             requestRates = data.RequestRates.ToList();
             requestStart = DateTime.UtcNow;
             statisticsRecorded = false;
@@ -1237,7 +1290,7 @@ namespace ClaudeUI
                 WriteLog("发现新版本，可更新：" + local + " → " + latest);
                 token.ThrowIfCancellationRequested();
                 if (closing) throw new OperationCanceledException();
-                var choice = MessageBox.Show(window, "本机版本：" + local + "\n最新版本：" + latest +
+                var choice = DialogVisuals.Show(window, "本机版本：" + local + "\n最新版本：" + latest +
                     "\n\n安装位置：" + selected.DisplayPath + "\n更新命令：" + plan.Command +
                     "\n\n是否立即下载并更新 CLI？", "Claude Code 版本更新", MessageBoxButton.YesNo,
                     MessageBoxImage.Question, MessageBoxResult.No);
@@ -1637,8 +1690,10 @@ namespace ClaudeUI
             foreach (var name in new[] { "NewButton", "WorkspaceButton", "AddProjectButton", "PickCliButton", "AutoCliButton", "ConfigButton", "ModelsButton", "EffortButton" })
                 Button(name).IsEnabled = !Busy;
             foreach (Button command in actions) command.IsEnabled = installation != null && !Busy;
-            history.IsEnabled = !Busy;
-            Find<StackPanel>("ProjectList").IsEnabled = !Busy;
+            history.IsEnabled = true;
+            Find<StackPanel>("ProjectList").IsEnabled = true;
+            foreach (var conversation in data.Conversations)
+                conversation.SetExecutionState(Busy && stream != null && conversation == current, Busy && conversation != current);
             prompt.IsReadOnly = Busy;
             if (Busy && completions != null) completions.Close();
             sessionModel.IsEnabled = !Busy;
@@ -1646,9 +1701,14 @@ namespace ClaudeUI
             if (Busy) optionMenus.Close();
             Button("AttachButton").IsEnabled = !Busy && !loadingConversation;
             Find<WrapPanel>("AttachmentList").IsEnabled = !Busy && !loadingConversation;
-            Button("SendButton").IsEnabled = installation != null && !Busy && !loadingConversation && !MissingModelProfile &&
-                (!String.IsNullOrWhiteSpace(prompt.Text) || (current != null && current.DraftAttachments != null && current.DraftAttachments.Count > 0));
-            Button("StopButton").Visibility = Visible(Busy);
+            // 发送入口在执行时原位切换成停止按钮，不再占用模型配置旁的额外位置。
+            var send = Button("SendButton");
+            send.IsEnabled = Busy || (installation != null && !loadingConversation && !MissingModelProfile &&
+                (!String.IsNullOrWhiteSpace(prompt.Text) || (current != null && current.DraftAttachments != null && current.DraftAttachments.Count > 0)));
+            Find<System.Windows.Shapes.Path>("SendArrow").Visibility = Visible(!Busy);
+            Find<System.Windows.Shapes.Rectangle>("SendStopIcon").Visibility = Visible(Busy);
+            send.ToolTip = Busy ? (cancellation.IsCancellationRequested ? "正在停止当前请求…" : "运行中，点击停止当前请求") : "发送消息（Enter）";
+            System.Windows.Automation.AutomationProperties.SetName(send, Busy ? "停止当前请求" : "发送");
             Button("StopToolButton").Visibility = Visible(Busy);
         }
 
@@ -1695,12 +1755,12 @@ namespace ClaudeUI
 
         private void Stop()
         {
-            if (cancellation != null) cancellation.Cancel();
+            if (cancellation != null) { cancellation.Cancel(); UpdateButtons(); }
         }
 
         private void Close(object sender, CancelEventArgs e)
         {
-            if (Busy && MessageBox.Show(window, "Claude CLI 仍在运行。要停止并关闭窗口吗？", "Claude UI",
+            if (Busy && DialogVisuals.Show(window, "Claude CLI 仍在运行。要停止并关闭窗口吗？", "Claude UI",
                 MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes)
             {
                 e.Cancel = true;

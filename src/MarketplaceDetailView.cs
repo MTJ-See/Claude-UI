@@ -41,7 +41,7 @@ namespace ClaudeUI
                 chip.SetResourceReference(Border.BackgroundProperty, "Composer"); tags.Children.Add(chip);
             }
             hero.Children.Add(tags);
-            hero.Children.Add(Label("作者  " + item.Author + "     ·     " + item.Popularity + (String.IsNullOrEmpty(item.License) ? "" : "     ·     " + item.License), 12, "MutedInk"));
+            hero.Children.Add(Label((item.Provider == "local" ? "来源  " : "作者  ") + item.Author + "     ·     " + item.Popularity + (String.IsNullOrEmpty(item.License) ? "" : "     ·     " + item.License), 12, "MutedInk"));
             var actions = new WrapPanel { Margin = new Thickness(0, 10, 0, 0) }; actions.Children.Add(install); if (source != null) actions.Children.Add(source); hero.Children.Add(actions);
             page.Children.Add(Card(hero));
             var intro = Section("功能介绍");
@@ -65,7 +65,7 @@ namespace ClaudeUI
             security.Children.Add(Label(item.Kind == MarketplaceKind.Mcp ? "本地 MCP 在你的账户权限下运行，远程 MCP 可接收工具调用中的数据。" : "Skill 可包含脚本和工具指令，使用时会影响 Claude 的行为。", 12, "MutedInk"));
             if (!String.IsNullOrEmpty(item.SourceUrl)) security.Children.Add(Label(item.SourceUrl, 12, "MutedInk"));
             page.Children.Add(Card(security));
-            var advanced = new Expander { Header = "查看官方安装配置", Margin = new Thickness(0, 2, 0, 16) };
+            var advanced = new Expander { Header = item.Provider == "local" ? "安装位置与来源" : "查看官方安装配置", Margin = new Thickness(0, 2, 0, 16) };
             advanced.SetResourceReference(Control.ForegroundProperty, "Ink");
             var code = new TextBox { Text = item.Installation ?? "平台未提供", IsReadOnly = true, TextWrapping = TextWrapping.Wrap, FontFamily = new FontFamily("Consolas"), FontSize = 12, Padding = new Thickness(14), BorderThickness = new Thickness(0) };
             code.SetResourceReference(Control.BackgroundProperty, "Composer"); code.SetResourceReference(Control.ForegroundProperty, "Ink"); advanced.Content = code; page.Children.Add(advanced);

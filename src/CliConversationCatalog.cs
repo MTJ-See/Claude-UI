@@ -44,6 +44,12 @@ namespace ClaudeUI
             return conversation.SessionId ?? conversation.Id;
         }
 
+        internal static bool TranscriptMatchesWorkspace(string file, string root, string id, string workspace)
+        {
+            var metadata = ReadMetadata(file, root, id);
+            return metadata != null && String.Equals(metadata.Workspace, Normalize(workspace), StringComparison.OrdinalIgnoreCase);
+        }
+
         public static string FindPersistedTranscript(string root, string workspace, string sessionId)
         {
             Guid id;

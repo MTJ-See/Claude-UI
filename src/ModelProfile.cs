@@ -16,6 +16,7 @@ namespace ClaudeUI
         public string ModelId { get; set; }
         public string BaseUrl { get; set; }
         public string Authentication { get; set; }
+        public string ApiProtocol { get; set; }
         public string ProtectedCredential { get; set; }
 
         internal bool UsesEndpoint { get { return !String.IsNullOrWhiteSpace(BaseUrl); } }
@@ -54,11 +55,19 @@ namespace ClaudeUI
         internal IDictionary<string, string> CliEnvironment()
         {
             if (!UsesEndpoint) return null;
-            string endpoint = NormalizeEndpoint(BaseUrl);
+            if (!IsModelId(ModelId)) throw new InvalidOperationException("请输入有效的模型 ID。");
+            string endpoint = String.IsNullOrEmpty(ApiProtocol) ? NormalizeEndpoint(BaseUrl) : ModelProtocol.Normalize(BaseUrl);
+            string protocol = endpoint == null ? ModelProtocol.Anthropic : ModelProtocol.Resolve(ApiProtocol, endpoint);
+            if (!ModelProtocol.Values.Contains(protocol)) throw new InvalidOperationException("未知的 API 协议，请重新选择。");
+            if (endpoint != null && !String.IsNullOrEmpty(ApiProtocol))
+            {
+                string target = ModelProtocol.Endpoint(endpoint, protocol, ModelId);
+                if (protocol == ModelProtocol.Anthropic) endpoint = target.Substring(0, target.Length - "/v1/messages".Length);
+            }
             if (endpoint == null || !IsModelId(ModelId) || (Authentication != Bearer && Authentication != ApiKey))
                 throw new InvalidOperationException("模型配置无效，请在「模型配置」中检查端点、模型 ID 和认证方式。");
             string credential = ReadCredential();
-            return new Dictionary<string, string> {
+            var environment = new Dictionary<string, string> {
                 { "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST", "1" },
                 { "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1" },
                 { "CLAUDE_CODE_USE_BEDROCK", null },
@@ -78,6 +87,12 @@ namespace ClaudeUI
                 { "ANTHROPIC_DEFAULT_OPUS_MODEL", ModelId },
                 { "CLAUDE_CODE_SUBAGENT_MODEL", ModelId }
             };
+            if (protocol != ModelProtocol.Anthropic)
+            {
+                environment["CLAUDEUI_API_PROTOCOL"] = protocol;
+                environment["CLAUDEUI_API_AUTH"] = Authentication;
+            }
+            return environment;
         }
 
         private string ReadCredential()

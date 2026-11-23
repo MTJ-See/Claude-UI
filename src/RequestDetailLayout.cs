@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
@@ -42,28 +42,34 @@ namespace ClaudeUI
             timing.Children.Add(Metric("本轮模型调用", row.CallsInRun > 0 ? row.CallsInRun.ToString("N0") + " 次" : "—", "同一轮 CLI 执行", 156));
             host.Children.Add(timing);
 
-            Section("TOKEN 与缓存");
+            bool relatedUsage = row.ExecutionOnly && row.CompletedCostRows != null && row.CompletedCostRows.Count > 0;
+            Section(relatedUsage ? "同轮已完成部分 TOKEN 与缓存" : "TOKEN 与缓存");
             var tokens = new WrapPanel();
-            tokens.Children.Add(Metric("未缓存输入", Number(row.Input), null, 128));
-            tokens.Children.Add(Metric("缓存写入", Number(row.CacheWrite), null, 128));
-            tokens.Children.Add(Metric("缓存读取", Number(row.CacheRead), null, 128));
+            tokens.Children.Add(Metric("未缓存输入", relatedUsage ? UsageNumber(RequestCostPresentation.SumUsage(row.CompletedCostRows, source => source.Input)) : Number(row.Input), null, 128));
+            tokens.Children.Add(Metric("缓存写入", relatedUsage ? UsageNumber(RequestCostPresentation.SumUsage(row.CompletedCostRows, source => source.CacheWrite)) : Number(row.CacheWrite), null, 128));
+            tokens.Children.Add(Metric("缓存读取", relatedUsage ? UsageNumber(RequestCostPresentation.SumUsage(row.CompletedCostRows, source => source.CacheRead)) : Number(row.CacheRead), null, 128));
             tokens.Children.Add(Metric("输出", row.OutputText, null, 128));
             host.Children.Add(tokens);
             Field("输入总量", row.InputText + (row.Incomplete ? "（仅收到部分数据）" : ""));
+            if (relatedUsage) Field("用量来源", row.UsageDetails);
+            else if (row.CompletedCostRows != null && row.CompletedCostRows.Count > 0)
+            {
+                Field("同轮已完成部分输入", UsageNumber(row.CompletedInputTokens));
+                Field("同轮已完成部分输出", UsageNumber(row.CompletedOutputTokens));
+                Field("关联用量说明", row.UsageDetails);
+            }
             if (row.CacheWrite1Hour.HasValue) Field("1 小时缓存写入", Number(row.CacheWrite1Hour));
 
             Section("费用");
             var costs = new WrapPanel();
+            if ((row.ExecutionOnly || row.Incomplete || row.Status == "已取消") && row.HasBilledAmount)
+                costs.Children.Add(Metric("中止前已返回扣费", row.BilledText, row.BillingField + " · 网关明确返回的金额", 258));
+            if (row.CompletedCostText.Length > 0)
+                costs.Children.Add(Metric("同轮已完成部分费用", row.CompletedCostText, "关联原请求费用，不是取消事件新增费用；汇总不重复计算。", 258));
             string estimate = "未估算", estimateLabel = "本地费用计算", estimateNote = "参考数值，不是网关账单";
             if (row.EstimatedCost.HasValue) estimate = row.EstimateText;
-            else if (row.CliEstimate.HasValue) { estimate = Money(row.CliEstimate.Value); estimateLabel = "单次 CLI 估算"; }
-            else if (row.RunEstimate.HasValue && row.CallsInRun > 1)
-            {
-                estimate = Money(row.RunEstimate.Value);
-                estimateLabel = "本轮 CLI 估算合计";
-                estimateNote = row.CallsInRun + " 次调用合计，不是单次请求费用";
-            }
-            costs.Children.Add(Metric(estimateLabel, estimate, estimateNote, 258));
+            if (estimate != "未估算" || row.CompletedCostText.Length == 0)
+                costs.Children.Add(Metric(estimateLabel, estimate, estimateNote, 258));
             host.Children.Add(costs);
             if (row.EstimatedCost.HasValue)
             {
@@ -71,7 +77,7 @@ namespace ClaudeUI
                     "输入 " + CostPart(row.EstimatedInputCost) + " / 缓存 " + CostPart(row.EstimatedCacheCost) + " / 输出 " + CostPart(row.EstimatedOutputCost));
                 Field("价格来源", row.PriceSource);
             }
-            if (!String.IsNullOrWhiteSpace(row.PricingStatus)) Field("计费状态", row.PricingStatus);
+            if (!String.IsNullOrWhiteSpace(row.PricingStatusText)) Field("计费状态", row.PricingStatusText);
 
             Section("时间与执行");
             Field("开始时间", row.TimeText);
@@ -139,6 +145,7 @@ namespace ClaudeUI
             return text;
         }
         private static string Value(string text) { return String.IsNullOrWhiteSpace(text) ? "—" : text; }
+        private static string UsageNumber(long? value) { return value.HasValue ? value.Value.ToString("N0") : "—"; }
         private static string Number(int? value) { return value.HasValue ? value.Value.ToString("N0") : "—"; }
         private static string Seconds(long milliseconds) { return (milliseconds / 1000d).ToString("0.000", CultureInfo.InvariantCulture) + " s"; }
         private static string Money(decimal value) { return "USD " + value.ToString("0.000000", CultureInfo.InvariantCulture); }

@@ -32,8 +32,8 @@ namespace ClaudeUI
         private readonly TextBlock detail = new TextBlock { FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(30, 5, 0, 0) };
         private readonly StackPanel stages = new StackPanel { Margin = new Thickness(4, 8, 0, 0) };
         private readonly TextBox requestIds = new TextBox { IsReadOnly = true, TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(30, 5, 0, 0), FontSize = 12, Visibility = Visibility.Collapsed };
-        private readonly Expander history;
+            Margin = new Thickness(4, 8, 0, 0), FontSize = 12 };
+        private readonly Expander history, requestHistory;
         private readonly RotateTransform rotation = new RotateTransform();
         private ChatRunSummary summary;
         private bool running;
@@ -60,7 +60,10 @@ namespace ClaudeUI
             panel.Children.Add(detail);
             requestIds.SetResourceReference(StyleProperty, "SelectableMetadata");
             System.Windows.Automation.AutomationProperties.SetName(requestIds, "本轮请求 ID，可选择复制");
-            panel.Children.Add(requestIds);
+            requestHistory = new Expander { Header = "请求 ID", Content = requestIds, FontSize = 12,
+                Margin = new Thickness(27, 8, 0, 0), Visibility = Visibility.Collapsed };
+            requestHistory.SetResourceReference(Control.ForegroundProperty, "MutedInk");
+            panel.Children.Add(requestHistory);
             history = new Expander { Header = "执行过程", Content = stages, FontSize = 12, Margin = new Thickness(27, 8, 0, 0) };
             history.SetResourceReference(Control.ForegroundProperty, "MutedInk");
             panel.Children.Add(history);
@@ -132,7 +135,8 @@ namespace ClaudeUI
             string text = summary == null || summary.RequestIds == null ? "" :
                 String.Join(Environment.NewLine, summary.RequestIds.Select(id => "请求 ID：" + id));
             if (requestIds.Text != text) requestIds.Text = text;
-            requestIds.Visibility = text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+            requestHistory.Visibility = text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+            requestHistory.Header = "请求 ID（" + (summary == null || summary.RequestIds == null ? 0 : summary.RequestIds.Count) + "）";
         }
 
         public void Restore(ChatRunSummary saved)

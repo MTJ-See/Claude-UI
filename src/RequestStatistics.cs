@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -31,7 +31,36 @@ namespace ClaudeUI
         public string PricingStatus { get; set; }
         [ScriptIgnore] public string StatusText { get { return Status ?? (Incomplete ? "不完整" : "历史记录"); } }
         [ScriptIgnore] public string DurationText { get { return DurationMs.HasValue ? (DurationMs.Value / 1000d).ToString("0.000", CultureInfo.InvariantCulture) + " s" : "—"; } }
-        [ScriptIgnore] public string EstimateText { get { return EstimatedCost.HasValue ? GatewayCharge.Format(EstimatedCost.Value, EstimateCurrency) : PricingStatus ?? "未估算"; } }
+        [ScriptIgnore] public IList<RequestStat> CompletedCostRows { get; set; }
+        [ScriptIgnore] public string CompletedCostText { get { return RequestCostPresentation.CompletedText(CompletedCostRows); } }
+        [ScriptIgnore] public string PricingStatusText
+        {
+            get
+            {
+                if (PricingStatus == "请求不完整，未计费" || PricingStatus == "请求未完成，费用未知")
+                    return CompletedCostText.Length > 0 ? "执行已终止，已完成部分费用保留" : HasBilledAmount ? "中止前已返回扣费金额" : "请求未完成，费用未知";
+                return PricingStatus;
+            }
+        }
+        [ScriptIgnore] public string EstimateText
+        {
+            get
+            {
+                if (EstimatedCost.HasValue) return GatewayCharge.Format(EstimatedCost.Value, EstimateCurrency);
+                if (ExecutionOnly || Incomplete || Status == "已取消")
+                {
+                    var known = new List<string>();
+                    if (HasBilledAmount) known.Add("网关扣费 " + BilledText);
+                    if (CompletedCostText.Length > 0) known.Add("已完成部分：" + CompletedCostText);
+                    if (known.Count > 0) return String.Join("；", known);
+                }
+                return PricingStatusText ?? "未估算";
+            }
+        }
+        [ScriptIgnore] public string CostDetails
+        {
+            get { return EstimateText + (CompletedCostText.Length > 0 ? "\n来自同轮已完成调用，不是取消事件新增费用；汇总按源请求去重。" : ""); }
+        }
         public string SessionId { get; set; }
         public string Model { get; set; }
         public string RequestedModel { get; set; }
@@ -67,8 +96,34 @@ namespace ClaudeUI
         {
             get { return Input.HasValue ? (long)Input.Value + (CacheWrite ?? 0) + (CacheRead ?? 0) : (long?)null; }
         }
-        [ScriptIgnore] public string InputText { get { return TotalInput.HasValue ? TotalInput.Value.ToString("N0") : "—"; } }
-        [ScriptIgnore] public string OutputText { get { return Output.HasValue ? Output.Value.ToString("N0") : "—"; } }
+        [ScriptIgnore] public long? CompletedInputTokens { get { return RequestCostPresentation.SumUsage(CompletedCostRows, row => row.TotalInput); } }
+        [ScriptIgnore] public long? CompletedOutputTokens { get { return RequestCostPresentation.SumUsage(CompletedCostRows, row => row.Output); } }
+        [ScriptIgnore] public bool CompletedInputPartial { get { return CompletedCostRows != null && CompletedCostRows.Any(row => !row.TotalInput.HasValue || row.TotalInput < 0); } }
+        [ScriptIgnore] public bool CompletedOutputPartial { get { return CompletedCostRows != null && CompletedCostRows.Any(row => !row.Output.HasValue || row.Output < 0); } }
+        [ScriptIgnore] public string InputText
+        {
+            get { return TotalInput.HasValue ? TotalInput.Value.ToString("N0") : ExecutionOnly && CompletedInputTokens.HasValue
+                ? CompletedInputTokens.Value.ToString("N0") + (CompletedInputPartial ? "*" : "") : "—"; }
+        }
+        [ScriptIgnore] public string OutputText
+        {
+            get { return Output.HasValue ? Output.Value.ToString("N0") : ExecutionOnly && CompletedOutputTokens.HasValue
+                ? CompletedOutputTokens.Value.ToString("N0") + (CompletedOutputPartial ? "*" : "") : "—"; }
+        }
+        [ScriptIgnore] public string UsageDetails
+        {
+            get
+            {
+                string current = ExecutionOnly && CompletedCostRows != null && CompletedCostRows.Count > 0
+                    ? "显示同轮已完成调用的关联用量，不是取消事件新增 Token；输入含缓存，汇总按源请求去重。"
+                    : "当前请求已报告的 Token；输入含缓存写入与读取。";
+                if (CompletedCostRows != null && CompletedCostRows.Count > 0)
+                    current += "\n同轮已完成部分：输入 " + (CompletedInputTokens.HasValue ? CompletedInputTokens.Value.ToString("N0") : "—") +
+                        " / 输出 " + (CompletedOutputTokens.HasValue ? CompletedOutputTokens.Value.ToString("N0") : "—");
+                if (CompletedInputPartial || CompletedOutputPartial) current += "\n* 部分调用未返回用量，仅合计已报告的数据。";
+                return current;
+            }
+        }
         [ScriptIgnore] public bool HasBilledAmount { get { return BilledAmount.HasValue; } }
         [ScriptIgnore] public string BilledText
         {
@@ -84,6 +139,10 @@ namespace ClaudeUI
     {
         internal static string Resolve(RequestStat row, IEnumerable<ModelProfile> profiles)
         {
+            // 本机默认仅展示实际模型名称，来源标记仍保存在原始记录中。
+            if (row.RequestedModelName == "本机默认")
+                return !String.IsNullOrWhiteSpace(row.Model) && row.Model != "—" ? row.Model :
+                    !String.IsNullOrWhiteSpace(row.RequestedModel) ? row.RequestedModel : "未记录模型";
             if (!String.IsNullOrWhiteSpace(row.RequestedModelName)) return row.RequestedModelName;
             var configured = (profiles ?? Enumerable.Empty<ModelProfile>()).Where(p => p != null && !String.IsNullOrWhiteSpace(p.Name)).ToList();
             string id = String.IsNullOrWhiteSpace(row.RequestedModel) ? row.Model : row.RequestedModel;
@@ -93,7 +152,10 @@ namespace ClaudeUI
             // Legacy records did not retain the requested ID. Only resolve a gateway with one configured model.
             if (matches.Count == 0 && String.IsNullOrWhiteSpace(row.RequestedModel))
                 matches = configured.Where(p => !String.IsNullOrEmpty(p.BaseUrl) && p.BaseUrl.TrimEnd('/') == (row.Gateway ?? "").TrimEnd('/')).ToList();
-            return matches.Count == 1 ? matches[0].Name : "未记录配置名称";
+            if (matches.Count == 1) return matches[0].Name;
+            // 旧记录未保存配置名称时仍展示已有模型标识，不猜测使用了哪个配置。
+            return !String.IsNullOrWhiteSpace(row.Model) && row.Model != "—" ? row.Model :
+                !String.IsNullOrWhiteSpace(row.RequestedModel) ? row.RequestedModel : "未记录模型";
         }
     }
 
@@ -265,6 +327,7 @@ namespace ClaudeUI
                 catch (ArgumentException) { }
                 catch (InvalidOperationException) { }
             }
+            RequestCostPresentation.Attach(result);
             return result;
         }
 
@@ -305,6 +368,36 @@ namespace ClaudeUI
                     else File.Move(temporary, path);
                 }
                 finally { if (File.Exists(temporary)) File.Delete(temporary); }
+            }
+        }
+
+        public void DeleteConversation(string sessionId, ISet<string> ownedRequestIds)
+        {
+            lock (Gate)
+            {
+                ConversationDeletion.RewriteJsonLines(path, line =>
+                {
+                    if (String.IsNullOrWhiteSpace(line)) return line;
+                    object[] batch;
+                    try { batch = serializer.DeserializeObject(line) as object[]; }
+                    catch (ArgumentException) { return line; }
+                    catch (InvalidOperationException) { return line; }
+                    if (batch == null) return line;
+                    var kept = batch.Where(value =>
+                    {
+                        var row = value as IDictionary<string, object>;
+                        if (row == null) return true;
+                        object valueSession, valueRequest;
+                        row.TryGetValue("SessionId", out valueSession);
+                        row.TryGetValue("RequestId", out valueRequest);
+                        string session = valueSession as string;
+                        return String.IsNullOrEmpty(session)
+                            ? !ownedRequestIds.Contains(valueRequest as string)
+                            : !String.Equals(session, sessionId, StringComparison.OrdinalIgnoreCase);
+                    }).ToArray();
+                    if (kept.Length == batch.Length) return line;
+                    return kept.Length == 0 ? null : serializer.Serialize(kept);
+                });
             }
         }
     }

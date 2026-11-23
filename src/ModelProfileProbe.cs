@@ -29,7 +29,7 @@ namespace ClaudeUI
             bool failed = true;
             try
             {
-                int exit = await runner.RunAsync(cli, workspace, options, "OK?", (line, error) =>
+                int exit = await runner.RunAsync(cli, workspace, options, "hello", (line, error) =>
                 {
                     if (!error) result.Read(line);
                     else if (!String.IsNullOrWhiteSpace(line)) stderr = line;
@@ -61,7 +61,7 @@ namespace ClaudeUI
             }
             switch (status)
             {
-                case 400: return "测试失败（400），请检查模型 ID 和端点是否兼容 Anthropic API。";
+                case 400: return "测试失败（400），请检查模型 ID、API 协议和接口地址是否匹配。";
                 case 401:
                 case 403: return "测试失败（" + status.Value + "），请检查 API 凭据、认证方式和模型权限。";
                 case 404: return "测试失败（404），请检查 API 基础地址和模型 ID。";

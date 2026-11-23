@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -60,6 +60,19 @@ namespace ClaudeUI
                 Write(Path.Combine(config,"settings.json"),new { enabledPlugins=new Dictionary<string,bool>{{"demo@market",true}} });
                 snapshot=manager.Scan();
                 Check(snapshot.Items.Any(i=>i.Name=="demo:tool" && !i.CanToggle) && snapshot.Items.Any(i=>i.Name=="plugin:demo:demo" && i.Enabled),"Plugin MCP and skills are identified with supported controls");
+                var mcpDetail=manager.Details(snapshot.Items.First(i=>i.Name=="fetch"));
+                Check(!mcpDetail.Readme.Contains("synthetic-secret") && mcpDetail.Parameters.Any(p=>p.Name=="API_KEY"),"Installed MCP details show parameter names without credentials");
+                var skillDetail=manager.Details(snapshot.Items.First(i=>i.Name=="code-review"));
+                Check(skillDetail.Readme.Contains("Example"),"Installed Skill details load the local manifest");
+                var pluginSkill=snapshot.Items.First(i=>i.Name=="demo:tool");
+                try { manager.Remove(pluginSkill,null,System.Threading.CancellationToken.None).GetAwaiter().GetResult(); throw new Exception("Removed plugin-owned files"); }
+                catch(InvalidOperationException) { Check(File.Exists(pluginSkill.Location),"Plugin-owned entries cannot be deleted individually"); }
+                var ownSkill=snapshot.Items.First(i=>i.Name=="code-review");
+                var forged=new InstalledExtension {Kind=ownSkill.Kind,Name=ownSkill.Name,Scope=ownSkill.Scope,Location=Path.Combine(root,"unrelated","SKILL.md")};
+                try { manager.Remove(forged,null,System.Threading.CancellationToken.None).GetAwaiter().GetResult(); throw new Exception("Accepted forged path"); }
+                catch(InvalidOperationException) { Check(File.Exists(ownSkill.Location),"Removal rejects entries outside the scanned source"); }
+                manager.Remove(ownSkill,null,System.Threading.CancellationToken.None).GetAwaiter().GetResult();
+                Check(!Directory.Exists(Path.GetDirectoryName(ownSkill.Location)) && File.Exists(pluginSkill.Location) && manager.Scan().Items.Any(i=>i.Name=="fetch"),"Skill deletion removes only the selected directory");
             }
             finally { MarketplaceInstaller.CheckTree(root); Directory.Delete(root,true); }
         }

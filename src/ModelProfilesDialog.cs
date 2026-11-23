@@ -16,7 +16,7 @@ namespace ClaudeUI
         private readonly ListBox list;
         private readonly TextBox name, modelId, endpoint;
         private readonly CheckBox custom;
-        private readonly ComboBox authentication;
+        private readonly ComboBox authentication, protocol;
         private readonly PasswordBox credential;
         private readonly TextBlock hint, status;
         private readonly StackPanel endpointFields;
@@ -29,7 +29,7 @@ namespace ClaudeUI
         public string RemovedId { get; private set; }
 
         public ModelProfilesDialog(Window owner, IList<ModelProfile> profiles, string selectedId,
-            Func<ModelProfile, CancellationToken, Task<string>> testProfile)
+            Func<ModelProfile, CancellationToken, Task<string>> testProfile, Action<Window, ModelProfile> configureRates = null)
         {
             this.profiles = profiles;
             view = new Window {
@@ -41,6 +41,8 @@ namespace ClaudeUI
             view.SetResourceReference(Window.BackgroundProperty, "Canvas");
             view.SetResourceReference(Window.ForegroundProperty, "Ink");
             var layout = new Grid { Margin = new Thickness(18) };
+            layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(180) });
             layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             var sidebar = new DockPanel { Margin = new Thickness(0, 0, 14, 0) };
@@ -76,10 +78,11 @@ namespace ClaudeUI
 
             endpointFields = new StackPanel();
             fields.Children.Add(endpointFields);
-            endpoint = AddField(endpointFields, "Anthropic 兼容 API 基础地址", new TextBox { MaxLength = 1024 });
-            endpoint.ToolTip = "填写 Anthropic 兼容的基础地址。例如 TokenDance 使用 https://tokendance.space/gateway。";
+            protocol = AddField(endpointFields, "API 协议", new ComboBox { ItemsSource = ModelProtocol.Labels, SelectedIndex = 0 });
+            endpoint = AddField(endpointFields, "API 地址（基础地址或完整接口）", new TextBox { MaxLength = 1024 });
+            endpoint.ToolTip = "可直接粘贴 /v1/chat/completions、/v1/responses 或 /v1beta/models/模型:generateContent 完整地址。只填基础地址时请选择协议。";
             authentication = AddField(endpointFields, "认证方式", new ComboBox {
-                ItemsSource = new[] { "Bearer Token", "x-api-key" }, SelectedIndex = 0
+                ItemsSource = new[] { "Bearer Token", "API Key（Gemini: x-goog-api-key；其他: x-api-key）" }, SelectedIndex = 0
             });
             credential = AddField(endpointFields, "API 凭据", new PasswordBox { MaxLength = 4096, Padding = new Thickness(8, 5, 8, 5) });
             credential.SetResourceReference(Control.BackgroundProperty, "Panel");
@@ -101,10 +104,26 @@ namespace ClaudeUI
             DockPanel.SetDock(cancel, Dock.Right);
             buttons.Children.Add(cancel);
             var test = new Button { Content = "测试连接", Margin = new Thickness(0, 0, 8, 0),
-                ToolTip = "用当前表单发一条简短的模型请求，可能产生少量 token 用量。" };
+                ToolTip = "使用当前配置固定发送 hello 测试连通性，可能产生少量 token 用量。" };
             DockPanel.SetDock(test, Dock.Right);
             buttons.Children.Add(test);
             form.Children.Add(buttons);
+            var ratesButton = new Button {
+                Content = "模型计费标准", HorizontalAlignment = HorizontalAlignment.Left,
+                IsEnabled = configureRates != null, ToolTip = "配置模型价格、计费方式和计费单位"
+            };
+            AutomationProperties.SetName(ratesButton, "模型计费标准");
+            ratesButton.Click += delegate {
+                configureRates(view, new ModelProfile { ModelId = modelId.Text.Trim(),
+                    BaseUrl = custom.IsChecked == true ? endpoint.Text.Trim() : null });
+            };
+            var ratesFooter = new Border { BorderThickness = new Thickness(0, 1, 0, 0),
+                Margin = new Thickness(0, 14, 0, 0), Padding = new Thickness(0, 12, 0, 0), Child = ratesButton };
+            ratesFooter.SetResourceReference(Border.BorderBrushProperty, "Line");
+            Grid.SetRow(ratesFooter, 1);
+            Grid.SetColumnSpan(ratesFooter, 2);
+            layout.Children.Add(ratesFooter);
+            DialogVisuals.Apply(view);
             view.Content = layout;
 
             list.SelectionChanged += delegate { ShowProfile((ModelProfile)list.SelectedItem); };
@@ -114,10 +133,11 @@ namespace ClaudeUI
             modelId.TextChanged += delegate { status.Text = ""; };
             endpoint.TextChanged += delegate { status.Text = ""; };
             authentication.SelectionChanged += delegate { status.Text = ""; };
+            protocol.SelectionChanged += delegate { status.Text = ""; };
             credential.PasswordChanged += delegate { status.Text = ""; };
             remove.Click += delegate
             {
-                if (editing == null || MessageBox.Show(view, "移除「" + editing.Name + "」？使用该配置的会话将需要重新选择模型。",
+                if (editing == null || DialogVisuals.Show(view, "移除「" + editing.Name + "」？使用该配置的会话将需要重新选择模型。",
                     "移除模型配置", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
                 RemovedId = editing.Id;
                 view.DialogResult = true;
@@ -128,12 +148,13 @@ namespace ClaudeUI
                 if (testCancellation != null) return;
                 var profile = ReadProfile(false);
                 if (profile == null) return;
-                sidebar.IsEnabled = fields.IsEnabled = save.IsEnabled = remove.IsEnabled = test.IsEnabled = false;
+                sidebar.IsEnabled = fields.IsEnabled = save.IsEnabled = remove.IsEnabled = test.IsEnabled = ratesButton.IsEnabled = false;
                 try { await TestAsync(profile, testProfile); }
                 finally
                 {
                     sidebar.IsEnabled = fields.IsEnabled = save.IsEnabled = test.IsEnabled = true;
                     remove.IsEnabled = editing != null;
+                    ratesButton.IsEnabled = configureRates != null;
                 }
             };
             view.Closed += delegate
@@ -162,7 +183,8 @@ namespace ClaudeUI
             editing = profile;
             name.Text = profile == null ? "" : profile.Name;
             modelId.Text = profile == null ? "" : profile.ModelId;
-            endpoint.Text = profile == null ? "" : ModelProfile.NormalizeEndpoint(profile.BaseUrl) ?? profile.BaseUrl ?? "";
+            endpoint.Text = profile == null ? "" : (String.IsNullOrEmpty(profile.ApiProtocol) ? ModelProfile.NormalizeEndpoint(profile.BaseUrl) : ModelProtocol.Normalize(profile.BaseUrl)) ?? profile.BaseUrl ?? "";
+            protocol.SelectedIndex = profile == null ? 0 : Math.Max(0, Array.IndexOf(ModelProtocol.Values, profile.ApiProtocol ?? ModelProtocol.Anthropic));
             authentication.SelectedIndex = profile != null && profile.Authentication == ModelProfile.ApiKey ? 1 : 0;
             credential.Clear();
             custom.IsChecked = profile != null && profile.UsesEndpoint;
@@ -177,6 +199,7 @@ namespace ClaudeUI
             hint.Text = editing != null && !String.IsNullOrEmpty(editing.ProtectedCredential)
                 ? "同一地址和认证方式留空时保留已存凭据。"
                 : "凭据使用 Windows 当前账户加密保存。";
+            hint.Text += " 自动识别依赖完整接口路径；只填基础地址时请选择协议。转换协议会在完整响应后显示回复。";
         }
 
         private void Save()
@@ -188,7 +211,7 @@ namespace ClaudeUI
             view.DialogResult = true;
         }
 
-        private async Task TestAsync(ModelProfile profile, Func<ModelProfile, CancellationToken, Task<string>> testProfile)
+        private async Task TestAsync(ModelProfile profile, Func<ModelProfile, CancellationToken, Task<string>> testProfile, Action<Window, ModelProfile> configureRates = null)
         {
             ShowStatus("正在发送测试请求…", "MutedInk");
             using (var token = new CancellationTokenSource(TimeSpan.FromSeconds(20)))
@@ -243,13 +266,16 @@ namespace ClaudeUI
             };
             if (custom.IsChecked == true)
             {
-                profile.BaseUrl = ModelProfile.NormalizeEndpoint(endpoint.Text.Trim());
+                profile.ApiProtocol = ModelProtocol.Values[Math.Max(0, protocol.SelectedIndex)];
+                profile.BaseUrl = ModelProtocol.Normalize(endpoint.Text.Trim());
                 if (profile.BaseUrl == null)
                 {
-                    ShowStatus("请输入 Anthropic 兼容的 HTTPS 基础地址，省略 /v1/messages 或 /v1/chat/completions。本机回环地址可使用 HTTP。", "Failure");
+                    ShowStatus("请输入有效的 HTTPS API 地址，可填写完整接口。本机回环地址可使用 HTTP。", "Failure");
                     endpoint.Focus();
                     return null;
                 }
+                try { ModelProtocol.Endpoint(profile.BaseUrl, ModelProtocol.Resolve(profile.ApiProtocol, profile.BaseUrl), profile.ModelId); }
+                catch (InvalidOperationException ex) { ShowStatus(ex.Message, "Failure"); return null; }
                 profile.Authentication = authentication.SelectedIndex == 1 ? ModelProfile.ApiKey : ModelProfile.Bearer;
                 string secret = credential.Password.Trim();
                 if (secret.Length > 0 && !secret.Any(Char.IsControl))
@@ -261,7 +287,7 @@ namespace ClaudeUI
                         return null;
                     }
                 }
-                else if (secret.Length == 0 && editing != null && ModelProfile.NormalizeEndpoint(editing.BaseUrl) == profile.BaseUrl &&
+                else if (secret.Length == 0 && editing != null && ModelProtocol.Normalize(editing.BaseUrl) == profile.BaseUrl &&
                     editing.Authentication == profile.Authentication)
                     profile.ProtectedCredential = editing.ProtectedCredential;
                 if (String.IsNullOrEmpty(profile.ProtectedCredential))

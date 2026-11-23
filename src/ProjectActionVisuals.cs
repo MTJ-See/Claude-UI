@@ -20,6 +20,7 @@ namespace ClaudeUI
                 case "edit": path = "M10 4 H6 Q3 4 3 7 V18 Q3 21 6 21 H17 Q20 21 20 18 V15 M9 15 L10 11 L18 3 Q19.5 1.5 21 3 Q22.5 4.5 21 6 L13 14 Z"; break;
                 case "restore": path = "M3 4 H21 V8 H3 Z M5 8 V20 H19 V8 M12 17 V11 M9 14 L12 11 L15 14"; break;
                 case "remove": path = "M8 12 H16 M12 3 A9 9 0 1 0 12 21 A9 9 0 1 0 12 3"; break;
+                case "trash": path = "M4 7 H20 M9 7 V4 H15 V7 M6 7 L7 20 H17 L18 7 M10 10 V17 M14 10 V17"; break;
                 case "back": path = "M20 12 H4 M10 6 L4 12 L10 18"; break;
                 default: path = "M3 4 H21 V8 H3 Z M5 8 V20 H19 V8 M10 12 H14"; break;
             }

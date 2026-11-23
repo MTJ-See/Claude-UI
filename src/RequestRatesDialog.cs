@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -35,6 +35,19 @@ namespace ClaudeUI
             }
             return saved ? null : "保存失败，配置保持原值。请检查本地文件权限或磁盘空间后重试。";
         }
+        // 删除失败时按原位置恢复，避免内存与磁盘配置不一致。
+        internal static string Delete(IList<RequestRate> rates, RequestRate previous, Func<bool> persist)
+        {
+            int index = previous == null ? -1 : rates.IndexOf(previous);
+            if (index < 0) return "原规则已更改，请重新选择。";
+            rates.RemoveAt(index);
+            bool saved = false;
+            try { saved = persist(); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+            finally { if (!saved) rates.Insert(index, previous); }
+            return saved ? null : "删除失败，原规则已保留。请检查本地文件权限或磁盘空间后重试。";
+        }
     }
 
     internal sealed class RequestRatesDialog
@@ -52,15 +65,21 @@ namespace ClaudeUI
         private readonly TextBox[] prices = new TextBox[4], peakPrices = new TextBox[4];
         private readonly TextBox perRequest, peakPerRequest;
         private RequestRate editing;
+        private readonly Button remove;
+        private readonly TextBlock editingState;
+        private readonly Func<RequestRate, bool> confirmDeletion;
 
         internal RequestRatesDialog(Window owner, IList<RequestRate> rates, Func<bool> persist, RequestStat selected,
-            IEnumerable<string> configuredModels = null)
+            IEnumerable<string> configuredModels = null, Func<RequestRate, bool> confirmDeletion = null)
         {
             this.rates = rates;
             this.persist = persist;
             view = new Window { Owner = owner, Title = "模型计费标准", Width = 850, Height = 760,
                 MinWidth = 740, MinHeight = 520, WindowStartupLocation = WindowStartupLocation.CenterOwner,
                 ShowInTaskbar = false, FontFamily = owner.FontFamily, FontSize = owner.FontSize };
+            this.confirmDeletion = confirmDeletion ?? (rate => DialogVisuals.Show(view,
+                "删除模型「" + rate.Model + "」的计费规则？\n历史请求的费用快照会保留。下一轮执行起，未配置的模型可能使用公开参考价格。",
+                "删除计费规则", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) == MessageBoxResult.Yes);
             view.Resources.MergedDictionaries.Add(owner.Resources);
             view.SetResourceReference(Window.BackgroundProperty, "Canvas");
             view.SetResourceReference(Window.ForegroundProperty, "Ink");
@@ -73,6 +92,9 @@ namespace ClaudeUI
             AutomationProperties.SetName(add, "新增计费规则");
             DockPanel.SetDock(add, Dock.Top);
             sidebar.Children.Add(add);
+            var listHint = new TextBlock { Text = "选择已有规则可修改或删除", TextWrapping = TextWrapping.Wrap, FontSize = 12, Margin = new Thickness(2, 0, 2, 12) };
+            listHint.SetResourceReference(TextBlock.ForegroundProperty, "MutedInk");
+            DockPanel.SetDock(listHint, Dock.Top); sidebar.Children.Add(listHint);
             list = new ListBox { ItemContainerStyle = (Style)owner.Resources["NavItem"] };
             var item = new FrameworkElementFactory(typeof(TextBlock));
             item.SetBinding(TextBlock.TextProperty, new Binding("DisplayName"));
@@ -94,10 +116,17 @@ namespace ClaudeUI
             var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
             var close = new Button { Content = "关闭", IsCancel = true, Margin = new Thickness(0, 0, 8, 0) };
             var save = new Button { Content = "保存规则", IsDefault = true, Style = (Style)owner.Resources["Primary"] };
-            buttons.Children.Add(close); buttons.Children.Add(save); footer.Children.Add(buttons);
+            remove = new Button { Content = "删除规则", IsEnabled = false, Margin = new Thickness(0, 0, 8, 0) };
+            remove.SetResourceReference(FrameworkElement.StyleProperty, "Ghost");
+            remove.SetResourceReference(Control.ForegroundProperty, "Failure");
+            AutomationProperties.SetName(remove, "删除计费规则");
+            buttons.Children.Add(remove); buttons.Children.Add(close); buttons.Children.Add(save); footer.Children.Add(buttons);
             DockPanel.SetDock(footer, Dock.Bottom); right.Children.Add(footer);
             var form = new StackPanel { Margin = new Thickness(0, 0, 12, 0) };
             right.Children.Add(new ScrollViewer { Content = form, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled });
+            editingState = new TextBlock { FontSize = 18, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 10) };
+            AutomationProperties.SetName(editingState, "计费规则编辑状态");
+            form.Children.Add(editingState);
             form.Children.Add(new TextBlock { Text = "优先精确匹配响应模型；无对应规则时匹配本轮请求的模型标识，支持网关返回不同模型名。网关留空适用于全部网关；同一模型下指定网关的规则优先。每轮执行开始时固定规则，编辑从下一轮生效，历史费用保留快照。", TextWrapping = TextWrapping.Wrap });
             model = Field(form, "模型标识", new ComboBox { IsEditable = true, IsTextSearchEnabled = true,
                 ItemsSource = (configuredModels ?? Enumerable.Empty<string>()).Where(id => !String.IsNullOrWhiteSpace(id))
@@ -125,9 +154,13 @@ namespace ClaudeUI
             peak.Click += delegate { UpdateVisibility(); };
             close.Click += delegate { view.Close(); };
             save.Click += delegate { Save(); };
+            remove.Click += delegate { Delete(); };
+            DialogVisuals.Apply(view);
             view.Content = layout;
             RefreshList();
             var previous = selected == null ? null : rates.FirstOrDefault(r => r != null && r.Matches(selected) && !String.IsNullOrEmpty(r.Gateway)) ?? rates.FirstOrDefault(r => r != null && r.Matches(selected));
+            // 没有指定请求时优先打开已有规则，便于再次进入后直接修改。
+            if (previous == null && selected == null) previous = rates.FirstOrDefault(rate => rate != null);
             if (previous != null) list.SelectedItem = previous;
             else Load(null, selected);
         }
@@ -149,6 +182,8 @@ namespace ClaudeUI
         private void Load(RequestRate rate, RequestStat selected)
         {
             editing = rate;
+            remove.IsEnabled = rate != null;
+            editingState.Text = rate == null ? "新增计费规则" : "编辑计费规则";
             var value = rate ?? new RequestRate { Model = selected == null ? "" : selected.Model, Currency = "CNY" };
             model.Text = value.Model ?? ""; gateway.Text = value.Gateway ?? "";
             enabled.IsChecked = value.Enabled;
@@ -193,6 +228,21 @@ namespace ClaudeUI
             if (!Decimal.TryParse(box.Text.Trim(), NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out value) || value < 0 || value > 1000000)
             { box.Focus(); throw new ArgumentException("请填写 0 到 1,000,000 之间的单价，小数使用英文句点，免费项填 0。"); }
             return value;
+        }
+
+        private void Delete()
+        {
+            var previous = editing;
+            if (previous == null || !confirmDeletion(previous)) return;
+            error.SetResourceReference(TextBlock.ForegroundProperty, "Failure");
+            int index = rates.IndexOf(previous);
+            string failure = RateConfiguration.Delete(rates, previous, persist);
+            if (failure != null) { error.Text = failure; return; }
+            RefreshList();
+            if (list.Items.Count > 0) list.SelectedIndex = Math.Min(Math.Max(0, index), list.Items.Count - 1);
+            else Load(null, null);
+            error.SetResourceReference(TextBlock.ForegroundProperty, "Success");
+            error.Text = "规则已删除；历史请求费用保持原值，下一轮执行使用更新后的规则。";
         }
 
         private void Save()

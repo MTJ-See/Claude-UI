@@ -195,6 +195,8 @@ namespace ClaudeUI
                 currentByParent[parentId] = row;
                 streamedRequests.Add(row);
                 UpdateUsage(row, StatisticsJson.Map(message, "usage"));
+                var charge = GatewayCharge.Read(message);
+                if (charge != null) responseCharges[row] = charge;
             }
             else if (type == "message_delta" || type == "message_stop")
             {
@@ -225,6 +227,8 @@ namespace ClaudeUI
             if (row == null) return;
             // Assistant blocks may arrive before or after the authoritative final delta.
             if (!streamedRequests.Contains(row) || !row.Input.HasValue) UpdateUsage(row, StatisticsJson.Map(message, "usage"));
+            var reportedCharge = GatewayCharge.Read(message);
+            if (reportedCharge != null) responseCharges[row] = reportedCharge;
             string reason = GetString(message, "stop_reason");
             if (reason.Length == 0) return;
             if (String.IsNullOrEmpty(row.EndReason)) row.EndReason = reason;
@@ -295,12 +299,13 @@ namespace ClaudeUI
                 row.Gateway = gateway == null ? "—" : gateway.Endpoint;
                 row.GatewaySource = gateway == null ? "CLI 未启动或未识别网关" : gateway.Source;
                 GatewayCharge charge;
-                if (!row.Incomplete && responseCharges.TryGetValue(row, out charge)) charge.Apply(row);
+                if (responseCharges.TryGetValue(row, out charge)) charge.Apply(row);
                 row.CallsInRun = actualCount;
                 row.RunEstimate = runCost;
                 if (String.IsNullOrEmpty(row.EndReason))
                     row.EndReason = i == actualCount - 1 && !String.IsNullOrEmpty(resultReason) ? resultReason : "未报告";
             }
+            RequestCostPresentation.Attach(requests);
             return requests;
         }
 
